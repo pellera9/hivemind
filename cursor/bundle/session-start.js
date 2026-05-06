@@ -54,7 +54,7 @@ var init_index_marker_store = __esm({
 
 // dist/src/hooks/cursor/session-start.js
 import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { dirname as dirname2 } from "node:path";
 
 // dist/src/commands/auth.js
 import { execSync } from "node:child_process";
@@ -620,8 +620,6 @@ function getInstalledVersion(bundleDir, pluginManifestDir) {
 // dist/src/hooks/cursor/session-start.js
 var log3 = (msg) => log("cursor-session-start", msg);
 var __bundleDir = dirname2(fileURLToPath(import.meta.url));
-var AUTH_CMD = join6(__bundleDir, "commands", "auth-login.js");
-var HIVEMIND_CLI = join6(__bundleDir, "..", "..", "bundle", "cli.js");
 var context = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents.
 
 Structure: index.md (start here) \u2192 summaries/*.md \u2192 sessions/*.jsonl (last resort). Do NOT jump straight to JSONL.
@@ -629,19 +627,30 @@ Search: use \`grep\` (NOT \`rg\`/ripgrep). Example: grep -ri "keyword" ~/.deepla
 IMPORTANT: Only use these bash builtins to interact with ~/.deeplake/memory/: cat, ls, grep, echo, jq, head, tail, sed, awk, wc, sort, find. Do NOT use rg/ripgrep, python, python3, node, curl, or other interpreters \u2014 they may not be installed and the memory filesystem only supports the listed builtins.
 Do NOT spawn subagents to read deeplake memory.
 
+Organization management \u2014 each argument is SEPARATE (do NOT quote subcommands together):
+- hivemind login                              \u2014 SSO login
+- hivemind whoami                             \u2014 show current user/org
+- hivemind org list                           \u2014 list organizations
+- hivemind org switch <name-or-id>            \u2014 switch organization
+- hivemind workspaces                         \u2014 list workspaces
+- hivemind workspace <id>                     \u2014 switch workspace
+- hivemind invite <email> <ADMIN|WRITE|READ>  \u2014 invite member (ALWAYS ask user which role before inviting)
+- hivemind members                            \u2014 list members
+- hivemind remove <user-id>                   \u2014 remove member
+
 SKILLS (skilify) \u2014 mine + share reusable skills across the org:
-- node "HIVEMIND_CLI" skilify                         \u2014 show scope/team/install + per-project state
-- node "HIVEMIND_CLI" skilify pull                    \u2014 sync project skills from the org table
-- node "HIVEMIND_CLI" skilify pull --user <email>     \u2014 only that author's skills
-- node "HIVEMIND_CLI" skilify pull --users a,b,c      \u2014 multiple authors (CSV)
-- node "HIVEMIND_CLI" skilify pull --all-users        \u2014 explicit "no author filter"
-- node "HIVEMIND_CLI" skilify pull --to project|global  \u2014 install location
-- node "HIVEMIND_CLI" skilify pull --dry-run          \u2014 preview only
-- node "HIVEMIND_CLI" skilify pull --force            \u2014 overwrite local (creates .bak)
-- node "HIVEMIND_CLI" skilify pull <skill-name>       \u2014 pull only that skill (combines with --user)
-- node "HIVEMIND_CLI" skilify scope <me|team|org>     \u2014 sharing scope for new skills
-- node "HIVEMIND_CLI" skilify install <project|global>  \u2014 default install location
-- node "HIVEMIND_CLI" skilify team add|remove|list <name>  \u2014 manage team list`;
+- hivemind skilify                         \u2014 show scope/team/install + per-project state
+- hivemind skilify pull                    \u2014 sync project skills from the org table
+- hivemind skilify pull --user <email>     \u2014 only that author's skills
+- hivemind skilify pull --users a,b,c      \u2014 multiple authors (CSV)
+- hivemind skilify pull --all-users        \u2014 explicit "no author filter"
+- hivemind skilify pull --to project|global  \u2014 install location
+- hivemind skilify pull --dry-run          \u2014 preview only
+- hivemind skilify pull --force            \u2014 overwrite local (creates .bak)
+- hivemind skilify pull <skill-name>       \u2014 pull only that skill (combines with --user)
+- hivemind skilify scope <me|team|org>     \u2014 sharing scope for new skills
+- hivemind skilify install <project|global>  \u2014 default install location
+- hivemind skilify team add|remove|list <name>  \u2014 manage team list`;
 function resolveSessionId(input) {
   return input.session_id ?? input.conversation_id ?? `cursor-${Date.now()}`;
 }
@@ -705,10 +714,9 @@ async function main() {
   if (current)
     versionNotice = `
 Hivemind v${current}`;
-  const resolvedContext = context.replace(/HIVEMIND_CLI/g, HIVEMIND_CLI);
-  const additionalContext = creds?.token ? `${resolvedContext}
-Logged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}` : `${resolvedContext}
-Not logged in to Deeplake. Run: node "${AUTH_CMD}" login${versionNotice}`;
+  const additionalContext = creds?.token ? `${context}
+Logged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}` : `${context}
+Not logged in to Deeplake. Run: hivemind login${versionNotice}`;
   console.log(JSON.stringify({ additional_context: additionalContext }));
 }
 main().catch((e) => {

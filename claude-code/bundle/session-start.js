@@ -726,8 +726,6 @@ var DEFAULT_MANIFEST_PATH = join7(homedir4(), ".claude", "plugins", "installed_p
 // dist/src/hooks/session-start.js
 var log3 = (msg) => log("session-start", msg);
 var __bundleDir = dirname3(fileURLToPath(import.meta.url));
-var AUTH_CMD = join8(__bundleDir, "commands", "auth-login.js");
-var HIVEMIND_CLI = join8(__bundleDir, "..", "..", "bundle", "cli.js");
 var context = `DEEPLAKE MEMORY: You have TWO memory sources. ALWAYS check BOTH when the user asks you to recall, remember, or look up ANY information:
 
 1. Your built-in memory (~/.claude/) \u2014 personal per-project notes
@@ -749,30 +747,30 @@ Tool choice on this mount:
   \u274C \`grep\` without a \`summaries/\` or \`sessions/\` suffix \u2014 too noisy, drowns the answer.
 
 Organization management \u2014 each argument is SEPARATE (do NOT quote subcommands together):
-- node "HIVEMIND_AUTH_CMD" login                              \u2014 SSO login
-- node "HIVEMIND_AUTH_CMD" whoami                             \u2014 show current user/org
-- node "HIVEMIND_AUTH_CMD" org list                           \u2014 list organizations
-- node "HIVEMIND_AUTH_CMD" org switch <name-or-id>            \u2014 switch organization
-- node "HIVEMIND_AUTH_CMD" workspaces                         \u2014 list workspaces
-- node "HIVEMIND_AUTH_CMD" workspace <id>                     \u2014 switch workspace
-- node "HIVEMIND_AUTH_CMD" invite <email> <ADMIN|WRITE|READ>  \u2014 invite member (ALWAYS ask user which role before inviting)
-- node "HIVEMIND_AUTH_CMD" members                            \u2014 list members
-- node "HIVEMIND_AUTH_CMD" remove <user-id>                   \u2014 remove member
+- hivemind login                              \u2014 SSO login
+- hivemind whoami                             \u2014 show current user/org
+- hivemind org list                           \u2014 list organizations
+- hivemind org switch <name-or-id>            \u2014 switch organization
+- hivemind workspaces                         \u2014 list workspaces
+- hivemind workspace <id>                     \u2014 switch workspace
+- hivemind invite <email> <ADMIN|WRITE|READ>  \u2014 invite member (ALWAYS ask user which role before inviting)
+- hivemind members                            \u2014 list members
+- hivemind remove <user-id>                   \u2014 remove member
 
 Skill management (mine + share reusable Claude skills across the org):
-- node "HIVEMIND_CLI" skilify                                  \u2014 show scope, team, install, per-project state
-- node "HIVEMIND_CLI" skilify pull                             \u2014 sync project skills from the org table to local FS
-- node "HIVEMIND_CLI" skilify pull --user <email>              \u2014 only skills authored by that user
-- node "HIVEMIND_CLI" skilify pull --users <a,b,c>             \u2014 only skills from those authors
-- node "HIVEMIND_CLI" skilify pull --all-users                 \u2014 explicit "no author filter" (default)
-- node "HIVEMIND_CLI" skilify pull --to <project|global>       \u2014 install location (project=cwd/.claude/skills, global=~/.claude/skills)
-- node "HIVEMIND_CLI" skilify pull --dry-run                   \u2014 preview without touching disk
-- node "HIVEMIND_CLI" skilify pull --force                     \u2014 overwrite local files even if up-to-date (creates .bak)
-- node "HIVEMIND_CLI" skilify pull <skill-name>                \u2014 pull only that one skill (combines with --user)
-- node "HIVEMIND_CLI" skilify scope <me|team|org>              \u2014 sharing scope for newly mined skills
-- node "HIVEMIND_CLI" skilify install <project|global>         \u2014 default install location for new skills
-- node "HIVEMIND_CLI" skilify promote <skill-name>             \u2014 move a project skill to the global location
-- node "HIVEMIND_CLI" skilify team add|remove|list <name>      \u2014 manage team member list
+- hivemind skilify                                  \u2014 show scope, team, install, per-project state
+- hivemind skilify pull                             \u2014 sync project skills from the org table to local FS
+- hivemind skilify pull --user <email>              \u2014 only skills authored by that user
+- hivemind skilify pull --users <a,b,c>             \u2014 only skills from those authors
+- hivemind skilify pull --all-users                 \u2014 explicit "no author filter" (default)
+- hivemind skilify pull --to <project|global>       \u2014 install location (project=cwd/.claude/skills, global=~/.claude/skills)
+- hivemind skilify pull --dry-run                   \u2014 preview without touching disk
+- hivemind skilify pull --force                     \u2014 overwrite local files even if up-to-date (creates .bak)
+- hivemind skilify pull <skill-name>                \u2014 pull only that one skill (combines with --user)
+- hivemind skilify scope <me|team|org>              \u2014 sharing scope for newly mined skills
+- hivemind skilify install <project|global>         \u2014 default install location for new skills
+- hivemind skilify promote <skill-name>             \u2014 move a project skill to the global location
+- hivemind skilify team add|remove|list <name>      \u2014 manage team member list
 
 IMPORTANT: Only use bash commands (cat, ls, grep, echo, jq, head, tail, etc.) to interact with ~/.deeplake/memory/. Do NOT use python, python3, node, curl, or other interpreters \u2014 they are not available in the memory filesystem. Avoid bash brace expansions like \`{1..10}\` (not fully supported); spell out paths explicitly. Bash output is capped at 10MB total \u2014 avoid \`for f in *.json; do cat $f\` style loops on the whole sessions dir.
 
@@ -894,7 +892,7 @@ async function main() {
   } catch (e) {
     log3(`version check failed: ${e.message}`);
   }
-  const resolvedContext = context.replace(/HIVEMIND_AUTH_CMD/g, AUTH_CMD).replace(/HIVEMIND_CLI/g, HIVEMIND_CLI);
+  const resolvedContext = context;
   const additionalContext = creds?.token ? `${resolvedContext}
 
 Logged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${updateNotice}` : `${resolvedContext}
