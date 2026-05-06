@@ -292,12 +292,22 @@ describe("runAuthCommand — org list / switch", () => {
 });
 
 describe("runAuthCommand — workspaces / workspace", () => {
-  it("'workspaces' lists each workspace from listWorkspaces", async () => {
+  it("'workspaces' lists each workspace's display name (one per line)", async () => {
     listWorkspacesMock.mockResolvedValue([{ id: "ws1", name: "default" }, { id: "ws2", name: "alt" }]);
     await run(["workspaces"]);
     expect(listWorkspacesMock).toHaveBeenCalledWith("tok", "https://api.example", "org-1");
-    expect(consoleText()).toContain("ws1  default");
-    expect(consoleText()).toContain("ws2  alt");
+    const lines = consoleText().split("\n").filter(l => l.length > 0);
+    expect(lines).toEqual(["default", "alt"]);
+  });
+
+  it("'workspaces' falls back to the id when a workspace has no display name", async () => {
+    // Defensive: API responses occasionally omit `name` for system/internal
+    // workspaces; the listing must still be readable instead of printing
+    // "undefined".
+    listWorkspacesMock.mockResolvedValue([{ id: "ws-no-name", name: undefined as unknown as string }]);
+    await run(["workspaces"]);
+    expect(consoleText()).toContain("ws-no-name");
+    expect(consoleText()).not.toContain("undefined");
   });
 
   it("'workspace' without a subcommand exits 1 with usage listing only `list` and `switch`", async () => {
@@ -320,13 +330,12 @@ describe("runAuthCommand — workspaces / workspace", () => {
     expect(listWorkspacesMock).not.toHaveBeenCalled();
   });
 
-  it("'workspace list' prints '<id>  <name>' for each workspace, mirroring the plural `workspaces` command", async () => {
+  it("'workspace list' prints each workspace's display name (one per line), matching the plural `workspaces` command", async () => {
     listWorkspacesMock.mockResolvedValue([{ id: "ws1", name: "default" }, { id: "ws2", name: "alt" }]);
     await run(["workspace", "list"]);
     expect(listWorkspacesMock).toHaveBeenCalledWith("tok", "https://api.example", "org-1");
-    const text = consoleText();
-    expect(text).toContain("ws1  default");
-    expect(text).toContain("ws2  alt");
+    const lines = consoleText().split("\n").filter(l => l.length > 0);
+    expect(lines).toEqual(["default", "alt"]);
     // Critical: must NOT call switchWorkspace — `list` is read-only.
     expect(switchWorkspaceMock).not.toHaveBeenCalled();
   });

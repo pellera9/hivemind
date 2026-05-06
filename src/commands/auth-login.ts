@@ -110,7 +110,7 @@ export async function runAuthCommand(args: string[]): Promise<void> {
     case "workspaces": {
       if (!creds) { console.log("Not logged in."); process.exit(1); }
       const ws = await listWorkspaces(creds.token, apiUrl, creds.orgId);
-      ws.forEach(w => console.log(`${w.id}  ${w.name}`));
+      ws.forEach(w => console.log(w.name || w.id));
       break;
     }
 
@@ -120,7 +120,7 @@ export async function runAuthCommand(args: string[]): Promise<void> {
 
       if (sub === "list") {
         const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
-        wsList.forEach(w => console.log(`${w.id}  ${w.name}`));
+        wsList.forEach(w => console.log(w.name || w.id));
         break;
       }
 
