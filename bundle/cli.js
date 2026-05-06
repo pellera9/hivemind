@@ -4731,6 +4731,20 @@ import { join as join17 } from "node:path";
 import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, readdirSync as readdirSync2, statSync as statSync2, writeFileSync as writeFileSync7 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join16 } from "node:path";
+function assertValidSkillName(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`invalid skill name: empty or non-string`);
+  }
+  if (name.length > 100) {
+    throw new Error(`invalid skill name: too long (${name.length} chars)`);
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+    throw new Error(`invalid skill name: contains path separator or '..': ${name}`);
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`invalid skill name: must be kebab-case (lowercase a-z, 0-9, hyphen): ${name}`);
+  }
+}
 function parseFrontmatter(text) {
   if (!text.startsWith("---\n") && !text.startsWith("---\r\n"))
     return null;
@@ -4788,7 +4802,12 @@ function buildPullSql(args) {
     where.push(`name = '${esc(args.skillName)}'`);
   }
   const whereClause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
-  return `SELECT name, project, project_key, body, version, source_agent, scope, author, description, trigger_text, source_sessions, install, created_at, updated_at FROM "${args.tableName}"${whereClause} ORDER BY name ASC, version DESC`;
+  return `SELECT name, project, project_key, body, version, source_agent, scope, author, description, trigger_text, source_sessions, install, created_at, updated_at FROM "${args.tableName}"${whereClause} ORDER BY project_key ASC, name ASC, version DESC`;
+}
+function isMissingTableError(message) {
+  if (!message)
+    return false;
+  return /Table does not exist|relation .* does not exist|no such table/i.test(message);
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
@@ -4802,9 +4821,13 @@ function selectLatestPerName(rows) {
   const out = [];
   for (const r of rows) {
     const name = String(r.name ?? "");
-    if (!name || seen.has(name))
+    const projectKey = String(r.project_key ?? "");
+    if (!name)
       continue;
-    seen.add(name);
+    const key = `${projectKey}\0${name}`;
+    if (seen.has(key))
+      continue;
+    seen.add(key);
     out.push(r);
   }
   return out;
@@ -4882,7 +4905,15 @@ async function runPull(opts) {
     users: opts.users,
     skillName: opts.skillName
   });
-  const rows = await opts.query(sql);
+  let rows = [];
+  try {
+    rows = await opts.query(sql);
+  } catch (e) {
+    if (isMissingTableError(e?.message))
+      rows = [];
+    else
+      throw e;
+  }
   const latest = selectLatestPerName(rows);
   const root = resolvePullDestination(opts.install, opts.cwd);
   const summary = { scanned: latest.length, wrote: 0, skipped: 0, dryrun: 0, entries: [] };
@@ -4890,7 +4921,23 @@ async function runPull(opts) {
     const name = String(row.name ?? "");
     if (!name)
       continue;
-    const skillDir = join17(root, name);
+    try {
+      assertValidSkillName(name);
+    } catch (e) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: "(invalid name \u2014 skipped)",
+        author: String(row.author ?? ""),
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
+    }
+    const projectKey = String(row.project_key ?? "");
+    const skillDir = projectKey ? join17(root, projectKey, name) : join17(root, name);
     const skillFile = join17(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);

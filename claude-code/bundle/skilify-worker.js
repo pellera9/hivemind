@@ -64,6 +64,20 @@ function extractPairs(rows) {
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
+function assertValidSkillName(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`invalid skill name: empty or non-string`);
+  }
+  if (name.length > 100) {
+    throw new Error(`invalid skill name: too long (${name.length} chars)`);
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+    throw new Error(`invalid skill name: contains path separator or '..': ${name}`);
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`invalid skill name: must be kebab-case (lowercase a-z, 0-9, hyphen): ${name}`);
+  }
+}
 function skillDir(skillsRoot, name) {
   return join2(skillsRoot, name);
 }
@@ -129,6 +143,7 @@ function parseFrontmatter(text) {
   return { fm, body };
 }
 function writeNewSkill(args) {
+  assertValidSkillName(args.name);
   const dir = skillDir(args.skillsRoot, args.name);
   const path = skillPath(args.skillsRoot, args.name);
   if (existsSync(path)) {
@@ -154,6 +169,7 @@ ${args.body.trim()}
   return { path, action: "created", version: 1 };
 }
 function mergeSkill(args) {
+  assertValidSkillName(args.name);
   const path = skillPath(args.skillsRoot, args.name);
   if (!existsSync(path)) {
     throw new Error(`skill ${args.name} does not exist at ${path}; use writeNewSkill`);
@@ -202,8 +218,19 @@ function resolveSkillsRoot(install, cwd) {
 
 // dist/src/skilify/skills-table.js
 import { randomUUID } from "node:crypto";
+
+// dist/src/utils/sql.js
+function sqlIdent(name) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    throw new Error(`Invalid SQL identifier: ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+// dist/src/skilify/skills-table.js
 function createSkillsTableSql(tableName) {
-  return `CREATE TABLE IF NOT EXISTS "${tableName}" (id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', install TEXT NOT NULL DEFAULT 'project', source_sessions TEXT NOT NULL DEFAULT '[]', source_agent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'me', author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', trigger_text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '') USING deeplake`;
+  const safe = sqlIdent(tableName);
+  return `CREATE TABLE IF NOT EXISTS "${safe}" (id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', install TEXT NOT NULL DEFAULT 'project', source_sessions TEXT NOT NULL DEFAULT '[]', source_agent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'me', author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', trigger_text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '') USING deeplake`;
 }
 function esc(s) {
   return s.replace(/\\/g, "\\\\").replace(/'/g, "''").replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
@@ -211,12 +238,12 @@ function esc(s) {
 function isMissingTableError(message) {
   if (!message)
     return false;
-  return /does not exist|permission denied|relation .* does not exist|no such table/i.test(message);
+  return /Table does not exist|relation .* does not exist|no such table/i.test(message);
 }
 async function insertSkillRow(args) {
   const id = args.id ?? randomUUID();
   const sourceSessionsJson = JSON.stringify(args.sourceSessions);
-  const sql = `INSERT INTO "${args.tableName}" (id, name, project, project_key, local_path, install, source_sessions, source_agent, scope, author, description, trigger_text, body, version, created_at, updated_at) VALUES ('${esc(id)}', '${esc(args.name)}', '${esc(args.project)}', '${esc(args.projectKey)}', '${esc(args.localPath)}', '${esc(args.install)}', '${esc(sourceSessionsJson)}', '${esc(args.sourceAgent)}', '${esc(args.scope)}', '${esc(args.author)}', '${esc(args.description)}', '${esc(args.trigger ?? "")}', '${esc(args.body)}', ${args.version}, '${esc(args.createdAt)}', '${esc(args.updatedAt)}')`;
+  const sql = `INSERT INTO "${sqlIdent(args.tableName)}" (id, name, project, project_key, local_path, install, source_sessions, source_agent, scope, author, description, trigger_text, body, version, created_at, updated_at) VALUES ('${esc(id)}', '${esc(args.name)}', '${esc(args.project)}', '${esc(args.projectKey)}', '${esc(args.localPath)}', '${esc(args.install)}', '${esc(sourceSessionsJson)}', '${esc(args.sourceAgent)}', '${esc(args.scope)}', '${esc(args.author)}', '${esc(args.description)}', '${esc(args.trigger ?? "")}', '${esc(args.body)}', ${args.version}, '${esc(args.createdAt)}', '${esc(args.updatedAt)}')`;
   try {
     await args.query(sql);
   } catch (e) {
@@ -268,14 +295,18 @@ function parseVerdict(raw) {
 }
 
 // dist/src/skilify/gate-runner.js
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
 function findAgentBin(agent) {
   const which = (name) => {
     try {
-      return execSync(`which ${name} 2>/dev/null`, { encoding: "utf-8" }).trim() || null;
+      const out = execFileSync("which", [name], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      return out.trim() || null;
     } catch {
       return null;
     }
@@ -363,7 +394,7 @@ function runGate(opts) {
 
 // dist/src/skilify/state.js
 import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, writeSync, mkdirSync as mkdirSync2, renameSync, existsSync as existsSync3, unlinkSync, openSync, closeSync } from "node:fs";
-import { execSync as execSync2 } from "node:child_process";
+import { execSync } from "node:child_process";
 import { homedir as homedir4 } from "node:os";
 import { createHash } from "node:crypto";
 import { join as join4, basename } from "node:path";
@@ -707,7 +738,8 @@ async function main() {
     }
     if (allPairs.length === 0) {
       wlog("no prompt/answer pairs after extraction \u2014 advancing watermark and exiting");
-      advanceWatermark(cfg.projectKey, usable[0].path, usable[0].lastMsg);
+      const oldest2 = usable[usable.length - 1];
+      advanceWatermark(cfg.projectKey, oldest2.path, oldest2.lastMsg);
       return;
     }
     wlog(`extracted ${allPairs.length} pairs across ${usable.length} sessions`);
@@ -738,13 +770,15 @@ async function main() {
     if (!verdict) {
       wlog(`no parseable verdict (${source}) \u2014 treating as SKIP, advancing watermark`);
       keepTmpForInspection = true;
-      advanceWatermark(cfg.projectKey, usable[0].path, usable[0].lastMsg);
+      const oldest2 = usable[usable.length - 1];
+      advanceWatermark(cfg.projectKey, oldest2.path, oldest2.lastMsg);
       return;
     }
     wlog(`verdict source: ${source}`);
     wlog(`verdict=${verdict.verdict} name=${verdict.name ?? "-"} reason=${verdict.reason ?? "-"}`);
-    const newestUuid = (usable[0].path.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
-    const newestDate = usable[0].lastMsg;
+    const oldest = usable[usable.length - 1];
+    const watermarkUuid = (oldest.path.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
+    const watermarkDate = oldest.lastMsg;
     const sourceSessions = usable.map((c) => (c.path.split("/").pop() ?? "").replace(/\.[^.]+$/, ""));
     async function recordToDeeplake(result, verdict2) {
       try {
@@ -784,11 +818,11 @@ async function main() {
           agent: cfg.agent
         });
         wlog(`wrote new skill: ${result.path}`);
-        recordSkill(cfg.projectKey, verdict.name, newestUuid, newestDate);
+        recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
         await recordToDeeplake(result, verdict);
       } catch (e) {
         wlog(`writeNewSkill failed: ${e.message}`);
-        advanceWatermark(cfg.projectKey, newestUuid, newestDate);
+        advanceWatermark(cfg.projectKey, watermarkUuid, watermarkDate);
       }
     } else if (verdict.verdict === "MERGE" && verdict.name && verdict.body) {
       try {
@@ -801,7 +835,7 @@ async function main() {
           agent: cfg.agent
         });
         wlog(`merged into skill: ${result.path} (v${result.version})`);
-        recordSkill(cfg.projectKey, verdict.name, newestUuid, newestDate);
+        recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
         await recordToDeeplake(result, verdict);
       } catch (e) {
         if (/does not exist/i.test(e.message ?? "")) {
@@ -817,19 +851,19 @@ async function main() {
               agent: cfg.agent
             });
             wlog(`wrote new skill (merge fallback): ${result.path}`);
-            recordSkill(cfg.projectKey, verdict.name, newestUuid, newestDate);
+            recordSkill(cfg.projectKey, verdict.name, watermarkUuid, watermarkDate);
             await recordToDeeplake(result, verdict);
           } catch (e2) {
             wlog(`writeNewSkill fallback also failed: ${e2.message}`);
-            advanceWatermark(cfg.projectKey, newestUuid, newestDate);
+            advanceWatermark(cfg.projectKey, watermarkUuid, watermarkDate);
           }
         } else {
           wlog(`mergeSkill failed: ${e.message}`);
-          advanceWatermark(cfg.projectKey, newestUuid, newestDate);
+          advanceWatermark(cfg.projectKey, watermarkUuid, watermarkDate);
         }
       }
     } else {
-      advanceWatermark(cfg.projectKey, newestUuid, newestDate);
+      advanceWatermark(cfg.projectKey, watermarkUuid, watermarkDate);
     }
   } catch (e) {
     wlog(`fatal: ${e.message}`);

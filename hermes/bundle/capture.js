@@ -1092,18 +1092,22 @@ function bundleDirFromImportMeta(importMetaUrl) {
 import { spawn as spawn3 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname2, join as join10 } from "node:path";
-import { writeFileSync as writeFileSync4, mkdirSync as mkdirSync5, appendFileSync as appendFileSync3 } from "node:fs";
+import { writeFileSync as writeFileSync4, mkdirSync as mkdirSync5, appendFileSync as appendFileSync3, chmodSync } from "node:fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "node:os";
 
 // dist/src/skilify/gate-runner.js
-import { execFileSync, execSync as execSync2 } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync as existsSync5 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join9 } from "node:path";
 function findAgentBin(agent) {
   const which = (name) => {
     try {
-      return execSync2(`which ${name} 2>/dev/null`, { encoding: "utf-8" }).trim() || null;
+      const out = execFileSync("which", [name], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      return out.trim() || null;
     } catch {
       return null;
     }
@@ -1159,7 +1163,11 @@ function spawnSkilifyWorker(opts) {
     hermesModel: process.env.HIVEMIND_HERMES_MODEL,
     skilifyLog: SKILIFY_LOG,
     currentSessionId
-  }));
+  }), { mode: 384 });
+  try {
+    chmodSync(configFile, 384);
+  } catch {
+  }
   skilifyLog(`${reason}: spawning skilify worker for project=${project} key=${projectKey}`);
   const workerPath = join10(bundleDir, "skilify-worker.js");
   spawn3("nohup", ["node", workerPath, configFile], {
@@ -1171,7 +1179,7 @@ function spawnSkilifyWorker(opts) {
 
 // dist/src/skilify/state.js
 import { readFileSync as readFileSync5, writeFileSync as writeFileSync5, writeSync as writeSync3, mkdirSync as mkdirSync6, renameSync as renameSync2, existsSync as existsSync6, unlinkSync as unlinkSync3, openSync as openSync3, closeSync as closeSync3 } from "node:fs";
-import { execSync as execSync3 } from "node:child_process";
+import { execSync as execSync2 } from "node:child_process";
 import { homedir as homedir9 } from "node:os";
 import { createHash } from "node:crypto";
 import { join as join11, basename } from "node:path";
@@ -1192,7 +1200,7 @@ function deriveProjectKey(cwd) {
   const project = basename(cwd) || "unknown";
   let signature = null;
   try {
-    signature = execSync3("git config --get remote.origin.url", {
+    signature = execSync2("git config --get remote.origin.url", {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -1467,7 +1475,7 @@ async function main() {
   }
   log4("capture ok \u2192 cloud");
   maybeTriggerPeriodicSummary(sessionId, cwd, config);
-  if (event === "post_llm_call") {
+  if (event === "post_llm_call" && process.env.HIVEMIND_WIKI_WORKER !== "1" && process.env.HIVEMIND_SKILIFY_WORKER !== "1") {
     tryStopCounterTrigger({
       config,
       cwd,

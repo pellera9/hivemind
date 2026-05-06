@@ -233,18 +233,22 @@ function bundleDirFromImportMeta(importMetaUrl) {
 import { spawn as spawn2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname2, join as join7 } from "node:path";
-import { writeFileSync as writeFileSync3, mkdirSync as mkdirSync4, appendFileSync as appendFileSync3 } from "node:fs";
+import { writeFileSync as writeFileSync3, mkdirSync as mkdirSync4, appendFileSync as appendFileSync3, chmodSync } from "node:fs";
 import { homedir as homedir6, tmpdir as tmpdir2 } from "node:os";
 
 // dist/src/skilify/gate-runner.js
-import { execFileSync, execSync as execSync2 } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync as existsSync3 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join6 } from "node:path";
 function findAgentBin(agent) {
   const which = (name) => {
     try {
-      return execSync2(`which ${name} 2>/dev/null`, { encoding: "utf-8" }).trim() || null;
+      const out = execFileSync("which", [name], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      return out.trim() || null;
     } catch {
       return null;
     }
@@ -300,7 +304,11 @@ function spawnSkilifyWorker(opts) {
     hermesModel: process.env.HIVEMIND_HERMES_MODEL,
     skilifyLog: SKILIFY_LOG,
     currentSessionId
-  }));
+  }), { mode: 384 });
+  try {
+    chmodSync(configFile, 384);
+  } catch {
+  }
   skilifyLog(`${reason}: spawning skilify worker for project=${project} key=${projectKey}`);
   const workerPath = join7(bundleDir, "skilify-worker.js");
   spawn2("nohup", ["node", workerPath, configFile], {
@@ -312,7 +320,7 @@ function spawnSkilifyWorker(opts) {
 
 // dist/src/skilify/state.js
 import { readFileSync as readFileSync3, writeFileSync as writeFileSync4, writeSync as writeSync2, mkdirSync as mkdirSync5, renameSync as renameSync2, existsSync as existsSync4, unlinkSync as unlinkSync2, openSync as openSync2, closeSync as closeSync2 } from "node:fs";
-import { execSync as execSync3 } from "node:child_process";
+import { execSync as execSync2 } from "node:child_process";
 import { homedir as homedir7 } from "node:os";
 import { createHash } from "node:crypto";
 import { join as join8, basename } from "node:path";
@@ -333,7 +341,7 @@ function deriveProjectKey(cwd) {
   const project = basename(cwd) || "unknown";
   let signature = null;
   try {
-    signature = execSync3("git config --get remote.origin.url", {
+    signature = execSync2("git config --get remote.origin.url", {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -516,28 +524,33 @@ async function main() {
     wikiLog(`SessionEnd: periodic worker already running for ${sessionId}, skipping final`);
     return;
   }
+  const config = loadConfig();
+  if (!config) {
+    wikiLog(`SessionEnd: no config, skipping summary`);
+    return;
+  }
+  const cwd = input.cwd ?? process.cwd();
   try {
-    const config = loadConfig();
-    if (!config) {
-      wikiLog(`SessionEnd: no config, skipping summary`);
-      return;
-    }
     spawnHermesWikiWorker({
       config,
       sessionId,
-      cwd: input.cwd ?? process.cwd(),
+      cwd,
       bundleDir: bundleDirFromImportMeta(import.meta.url),
       reason: "SessionEnd"
     });
+  } catch (e) {
+    wikiLog(`SessionEnd: wiki spawn failed: ${e?.message ?? e}`);
+  }
+  try {
     forceSessionEndTrigger({
       config,
-      cwd: input.cwd ?? process.cwd(),
+      cwd,
       bundleDir: bundleDirFromImportMeta(import.meta.url),
       agent: "hermes",
       sessionId
     });
   } catch (e) {
-    wikiLog(`SessionEnd: spawn failed: ${e?.message ?? e}`);
+    wikiLog(`SessionEnd: skilify trigger failed: ${e?.message ?? e}`);
   }
 }
 main().catch((e) => {
