@@ -890,17 +890,23 @@ async function runAuthCommand(args) {
           console.log(`Org not found: ${target}`);
           process.exit(1);
         }
+        const prevWs = creds.workspaceId ?? "default";
+        const lcPrev = prevWs.toLowerCase();
+        const wsList = await listWorkspaces(creds.token, apiUrl, match.id);
+        const matchedWs = wsList.find((w) => w.id === prevWs || w.name && w.name.toLowerCase() === lcPrev);
         await switchOrg(match.id, match.name);
         console.log(`Switched to org: ${match.name}`);
-        const prevWs = creds.workspaceId ?? "default";
-        const wsList = await listWorkspaces(creds.token, apiUrl, match.id);
-        const stillThere = wsList.some((w) => w.id === prevWs || w.name.toLowerCase() === prevWs.toLowerCase());
-        if (!stillThere) {
-          await switchWorkspace("default");
-          console.log(`Workspace '${prevWs}' is not in org '${match.name}'. Reset workspace to 'default'.`);
-          if (wsList.length > 0) {
-            console.log(`Available workspaces: ${wsList.map((w) => w.name || w.id).join(", ")}`);
+        if (!matchedWs) {
+          if (prevWs !== "default") {
+            await switchWorkspace("default");
+            console.log(`Workspace '${prevWs}' is not in org '${match.name}'. Reset workspace to 'default'.`);
+            if (wsList.length > 0) {
+              console.log(`Available workspaces: ${wsList.map((w) => w.name || w.id).join(", ")}`);
+            }
           }
+        } else if (matchedWs.id !== prevWs) {
+          await switchWorkspace(matchedWs.id);
+          console.log(`Workspace name '${prevWs}' resolved to id '${matchedWs.id}' in org '${match.name}'.`);
         }
       } else {
         console.log("Usage: org list | org switch <name-or-id>");
@@ -934,7 +940,8 @@ async function runAuthCommand(args) {
           process.exit(1);
         }
         const wsList = await listWorkspaces(creds.token, apiUrl, creds.orgId);
-        const match = wsList.find((w) => w.id === target || w.name.toLowerCase() === target.toLowerCase());
+        const lcTarget = target.toLowerCase();
+        const match = wsList.find((w) => w.id === target || w.name && w.name.toLowerCase() === lcTarget);
         if (!match) {
           console.log(`Workspace not found: ${target}`);
           if (wsList.length > 0) {
