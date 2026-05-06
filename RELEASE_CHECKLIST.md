@@ -81,15 +81,21 @@ agents and quietly excluded the other two.
 | Codex       | `src/hooks/codex/`, `codex/bundle/` | full | ✅ | ✅ session-start.ts | npm bin via `$CODEX_PLUGIN_ROOT` |
 | Cursor      | `src/hooks/cursor/`, `cursor/bundle/` | session-start + end + capture + pre-tool-use | ✅ | ✅ session-start.ts | no slash command surface |
 | Hermes      | `src/hooks/hermes/`, `hermes/bundle/` | analogous to cursor | ✅ | ✅ session-start.ts | gate uses OpenRouter (`hermes -z`), NOT claude |
-| **Pi**      | `pi/extension-source/hivemind.ts` (raw .ts, no bundle) | full (session_start, input, tool_result, message_end, session_shutdown) | ⚠️ partial — inject yes, worker firing TBD | ✅ inline in `CONTEXT_PREAMBLE` | self-contained extension; pi compiles the .ts at load time |
-| **OpenClaw**| `openclaw/src/index.ts`, `openclaw/skills/SKILL.md` | gateway plugin (no agent sessions to mine) | ❌ N/A by design | ✅ in `openclaw/skills/SKILL.md` | runtime is HTTP/WebSocket gateway; agents consume openclaw, openclaw doesn't run sessions |
+| **Pi**      | `pi/extension-source/hivemind.ts` (raw .ts, no bundle) | full (session_start, input, tool_result, message_end, session_shutdown) | ✅ via `pi/bundle/skilify-worker.js` spawned from session_shutdown | ✅ inline in `CONTEXT_PREAMBLE` | self-contained extension; pi compiles the .ts at load time |
+| **OpenClaw**| `openclaw/src/index.ts`, `openclaw/skills/SKILL.md` | `before_prompt_build`, `before_agent_start`, `agent_end` | ✅ via `openclaw/dist/skilify-worker.js` spawned from `agent_end` | ✅ in `openclaw/skills/SKILL.md` | gateway plugin: captures sessions to the same `sessions` table; bypasses esbuild's `child_process` stub via `createRequire(import.meta.url)` |
 
-**Mining (worker firing on session end)** is only applicable when the
-agent runs the user's sessions inside its own runtime. CC, Codex,
-Cursor, Hermes, and Pi qualify; OpenClaw does not. So OpenClaw's
-mining row is "N/A by design" — but its **discoverability** (the agent
-on the other side of the gateway needs to know skilify exists) IS still
-in scope, surfaced via SKILL.md.
+**Mining (worker firing on session end)** applies wherever the agent
+captures sessions — which is all six. Earlier drafts of this section
+incorrectly described OpenClaw mining as "N/A by design"; OpenClaw
+does in fact capture sessions to the same `sessions` Deeplake table
+(see `openclaw/src/index.ts:903` agent_end hook), and the worker can
+mine them just like any other agent. The wiring lives at
+`openclaw/src/index.ts:spawnOpenclawSkilifyWorker` and fires from the
+agent_end hook after each capture. Bundle: `openclaw/dist/skilify-worker.js`
+(separate esbuild entry, isolated from the gateway's child_process
+stub via `createRequire(import.meta.url)`). E2E verified live against
+Deeplake plugin_test_1/test1 sandbox: 6/6 PASS, real skill produced
+in 20.7s.
 
 **Discoverability (inject)** is in scope for all six. The injection
 *mechanism* differs:
@@ -231,8 +237,10 @@ we passed every section EXCEPT:
 - **Section 4** — the SessionStart injection was never extended for skilify, even though `auth-login` already had its parallel section. All four agents shipped without any way to discover `hivemind skilify pull --user X` or its variants. Closed by commits `64b25eb` + `e5c5987`.
 - **Section 4 (slash command)** — initial slash command files (`claude-code/commands/skilify.md`, `codex/commands/skilify.md`) used the bare-binary form `hivemind skilify $ARGUMENTS`, which silently fails for marketplace-installed users (no global `hivemind` bin). After deciding the SessionStart inject + CLI cover the ground, both files were removed rather than fixed — keeping the surface honest across the 4 agents (Cursor and Hermes never had slash commands anyway). Reviewer Kaghni surfaced this on PR comment 3196839552.
 - **Section 3 (per-agent matrix scope)** — the matrix in this checklist initially listed only **four** agents (CC / Codex / Cursor / Hermes). Pi has the full session lifecycle (`session_start` … `session_shutdown`) via its extension API and was simply forgotten. OpenClaw has a different model (gateway, not session runner) but its agent-facing SKILL.md was also untouched. Both were closed when the user asked "Abbiamo coperto anche OpenClaw e Pi?" and forced the surface to grow from 4 to 6. The matrix table in Section 3 now explicitly enumerates all six.
+- **Section 3 (mistake about OpenClaw mining being "N/A by design")** — the first revision of the matrix table claimed OpenClaw mining was "N/A by design — gateway, no sessions to mine." This was wrong: `openclaw/src/index.ts:903` hooks `agent_end` and writes captured messages to the same `sessions` Deeplake table CC/Codex/Cursor/Hermes/Pi share. The user caught this by asking "how are we saving the sessions with openclaw?" — once forced to read the source, the gap was obvious. Fixed by adding `spawnOpenclawSkilifyWorker` and a sibling `openclaw/dist/skilify-worker.js` bundle (separate esbuild entry, runtime spawn via `createRequire(import.meta.url)` to bypass the main bundle's `child_process` stub). E2E verified: real skill produced in 20.7s against the live Deeplake sandbox.
 
-Four gaps caught only because the user asked the right cynical
+Five gaps caught only because the user asked the right cynical
 questions ("ha funzionato tutto davvero?" / "will cc codex etc know?" /
 "non ci serve" on the slash command / "Abbiamo coperto anche OpenClaw
-e Pi?"). This file exists so the next PR doesn't depend on luck.
+e Pi?" / "how are we saving the sessions with openclaw?"). This file
+exists so the next PR doesn't depend on luck.
