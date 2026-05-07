@@ -41,8 +41,8 @@ Do NOT jump straight to reading raw JSONL files. Always start with `hivemind_ind
 - `/hivemind_switch_org <name-or-id>` — switch organization
 - `/hivemind_workspaces` — list workspaces
 - `/hivemind_switch_workspace <id>` — switch workspace
-- `/hivemind_version` — show installed version and check ClawHub for updates
-- `/hivemind_update` — shows how to install (ask the agent, or run `openclaw plugins update hivemind` in your terminal)
+- `/hivemind_version` — show installed version and check npm for updates
+- `/hivemind_update` — shows how to install (ask the agent, or run `hivemind update` in your terminal)
 - `/hivemind_autoupdate [on|off]` — toggle the agent-facing update nudge (on by default: when a newer version is available, the agent is prompted to install it via `exec` if you ask to update)
 
 ## Limits
