@@ -3526,8 +3526,8 @@ function findHivemindInstalls(home = HOME) {
       } catch {
         continue;
       }
-      const candidates2 = [join9(dir, "bundle"), join9(dir, "claude-code", "bundle")];
-      if (candidates2.some((p) => existsSync8(p))) {
+      const candidates = [join9(dir, "bundle"), join9(dir, "claude-code", "bundle")];
+      if (candidates.some((p) => existsSync8(p))) {
         out.push({ id: `claude (${ver})`, pluginDir: dir });
       }
     }
@@ -4936,19 +4936,24 @@ function pruneOrphanedEntries(path = manifestPath()) {
 import { existsSync as existsSync15 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { join as join18 } from "node:path";
-function candidates(home) {
-  return [
-    // agentskills.io shared root — codex installer always creates it,
-    // pi reads from it as one of two paths.
-    join18(home, ".agents", "skills"),
-    // hermes-specific root, agentskills.io-compatible layout.
-    join18(home, ".hermes", "skills"),
-    // pi's primary root (pi reads from this AND ~/.agents/skills/).
-    join18(home, ".pi", "agent", "skills")
-  ];
+function resolveDetected(home) {
+  const out = [];
+  const codexInstalled = existsSync15(join18(home, ".codex"));
+  const piInstalled = existsSync15(join18(home, ".pi", "agent"));
+  const hermesInstalled = existsSync15(join18(home, ".hermes"));
+  if (codexInstalled || piInstalled) {
+    out.push(join18(home, ".agents", "skills"));
+  }
+  if (hermesInstalled) {
+    out.push(join18(home, ".hermes", "skills"));
+  }
+  if (piInstalled) {
+    out.push(join18(home, ".pi", "agent", "skills"));
+  }
+  return out;
 }
 function detectAgentSkillsRoots(canonicalRoot, home = homedir8()) {
-  return candidates(home).filter((p) => p !== canonicalRoot && existsSync15(p));
+  return resolveDetected(home).filter((p) => p !== canonicalRoot);
 }
 
 // dist/src/skilify/pull.js
@@ -5026,6 +5031,35 @@ function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
     }
   }
   return out;
+}
+function backfillSymlinks(installRoot) {
+  const manifest = loadManifest();
+  const entries = entriesForRoot(manifest, "global", installRoot);
+  if (entries.length === 0)
+    return;
+  const detected = detectAgentSkillsRoots(installRoot);
+  for (const entry of entries) {
+    const canonical = join19(entry.installRoot, entry.dirName);
+    if (!existsSync16(canonical))
+      continue;
+    const fresh = fanOutSymlinks(canonical, entry.dirName, detected);
+    if (sameSorted(fresh, entry.symlinks))
+      continue;
+    try {
+      recordPull({ ...entry, symlinks: fresh });
+    } catch {
+    }
+  }
+}
+function sameSorted(a, b) {
+  if (a.length !== b.length)
+    return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++)
+    if (sa[i] !== sb[i])
+      return false;
+  return true;
 }
 function selectLatestPerName(rows) {
   const seen = /* @__PURE__ */ new Set();
@@ -5233,6 +5267,9 @@ async function runPull(opts) {
       summary.dryrun++;
     else
       summary.skipped++;
+  }
+  if (!opts.dryRun && opts.install === "global") {
+    backfillSymlinks(root);
   }
   return summary;
 }
