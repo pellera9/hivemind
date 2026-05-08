@@ -3517,8 +3517,8 @@ function findHivemindInstalls(home = HOME) {
       } catch {
         continue;
       }
-      const candidates = [join9(dir, "bundle"), join9(dir, "claude-code", "bundle")];
-      if (candidates.some((p) => existsSync8(p))) {
+      const candidates2 = [join9(dir, "bundle"), join9(dir, "claude-code", "bundle")];
+      if (candidates2.some((p) => existsSync8(p))) {
         out.push({ id: `claude (${ver})`, pluginDir: dir });
       }
     }
@@ -4710,9 +4710,9 @@ if (process.argv[1] && process.argv[1].endsWith("auth-login.js")) {
 }
 
 // dist/src/commands/skilify.js
-import { readdirSync as readdirSync4, existsSync as existsSync17, readFileSync as readFileSync13, mkdirSync as mkdirSync8, renameSync as renameSync3 } from "node:fs";
-import { homedir as homedir10 } from "node:os";
-import { dirname as dirname3, join as join20 } from "node:path";
+import { readdirSync as readdirSync4, existsSync as existsSync18, readFileSync as readFileSync13, mkdirSync as mkdirSync8, renameSync as renameSync3 } from "node:fs";
+import { homedir as homedir11 } from "node:os";
+import { dirname as dirname4, join as join21 } from "node:path";
 
 // dist/src/skilify/scope-config.js
 import { existsSync as existsSync12, mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync6 } from "node:fs";
@@ -4740,9 +4740,9 @@ function saveScopeConfig(cfg) {
 }
 
 // dist/src/skilify/pull.js
-import { existsSync as existsSync15, readFileSync as readFileSync12, writeFileSync as writeFileSync9, mkdirSync as mkdirSync7, renameSync as renameSync2 } from "node:fs";
-import { homedir as homedir8 } from "node:os";
-import { join as join18 } from "node:path";
+import { existsSync as existsSync16, readFileSync as readFileSync12, writeFileSync as writeFileSync9, mkdirSync as mkdirSync7, renameSync as renameSync2, lstatSync as lstatSync4, readlinkSync as readlinkSync2, symlinkSync as symlinkSync2, unlinkSync as unlinkSync8 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { dirname as dirname3, join as join19 } from "node:path";
 
 // dist/src/skilify/skill-writer.js
 import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, readdirSync as readdirSync2, statSync as statSync2, writeFileSync as writeFileSync7 } from "node:fs";
@@ -4806,7 +4806,7 @@ function parseFrontmatter(text) {
 }
 
 // dist/src/skilify/manifest.js
-import { existsSync as existsSync14, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync14, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync, unlinkSync as unlinkSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { dirname as dirname2, join as join17 } from "node:path";
 function emptyManifest() {
@@ -4846,6 +4846,8 @@ function loadManifest(path = manifestPath()) {
         continue;
       if (e.install !== "global" && e.install !== "project")
         continue;
+      const symlinks = Array.isArray(e.symlinks) ? e.symlinks.filter((p) => typeof p === "string" && p.length > 0 && (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) && // absolute (POSIX or Windows)
+      !p.includes("..")) : [];
       entries.push({
         dirName: e.dirName,
         name: e.name,
@@ -4854,7 +4856,8 @@ function loadManifest(path = manifestPath()) {
         remoteVersion: typeof e.remoteVersion === "number" ? e.remoteVersion : 1,
         install: e.install,
         installRoot: e.installRoot,
-        pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : (/* @__PURE__ */ new Date()).toISOString()
+        pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : (/* @__PURE__ */ new Date()).toISOString(),
+        symlinks
       });
     }
     return { version: 1, entries };
@@ -4886,6 +4889,57 @@ function removePullEntry(install, installRoot, dirName, path = manifestPath()) {
 }
 function entriesForRoot(m, install, installRoot) {
   return m.entries.filter((e) => e.install === install && e.installRoot === installRoot);
+}
+function unlinkSymlinks(paths) {
+  for (const path of paths) {
+    let st;
+    try {
+      st = lstatSync3(path);
+    } catch {
+      continue;
+    }
+    if (!st.isSymbolicLink())
+      continue;
+    try {
+      unlinkSync7(path);
+    } catch {
+    }
+  }
+}
+function pruneOrphanedEntries(path = manifestPath()) {
+  const m = loadManifest(path);
+  const live = [];
+  let pruned = 0;
+  for (const e of m.entries) {
+    if (existsSync14(join17(e.installRoot, e.dirName))) {
+      live.push(e);
+      continue;
+    }
+    unlinkSymlinks(e.symlinks);
+    pruned++;
+  }
+  if (pruned > 0)
+    saveManifest({ version: 1, entries: live }, path);
+  return pruned;
+}
+
+// dist/src/skilify/agent-roots.js
+import { existsSync as existsSync15 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { join as join18 } from "node:path";
+function candidates(home) {
+  return [
+    // agentskills.io shared root — codex installer always creates it,
+    // pi reads from it as one of two paths.
+    join18(home, ".agents", "skills"),
+    // hermes-specific root, agentskills.io-compatible layout.
+    join18(home, ".hermes", "skills"),
+    // pi's primary root (pi reads from this AND ~/.agents/skills/).
+    join18(home, ".pi", "agent", "skills")
+  ];
+}
+function detectAgentSkillsRoots(canonicalRoot, home = homedir8()) {
+  return candidates(home).filter((p) => p !== canonicalRoot && existsSync15(p));
 }
 
 // dist/src/skilify/pull.js
@@ -4920,10 +4974,49 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join18(homedir8(), ".claude", "skills");
+    return join19(homedir9(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join18(cwd, ".claude", "skills");
+  return join19(cwd, ".claude", "skills");
+}
+function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
+  const out = [];
+  for (const root of agentRoots) {
+    const link = join19(root, dirName);
+    let existing;
+    try {
+      existing = lstatSync4(link);
+    } catch {
+      existing = null;
+    }
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        continue;
+      }
+      let current;
+      try {
+        current = readlinkSync2(link);
+      } catch {
+        current = null;
+      }
+      if (current === canonicalDir) {
+        out.push(link);
+        continue;
+      }
+      try {
+        unlinkSync8(link);
+      } catch {
+        continue;
+      }
+    }
+    try {
+      mkdirSync7(dirname3(link), { recursive: true });
+      symlinkSync2(canonicalDir, link, "dir");
+      out.push(link);
+    } catch {
+    }
+  }
+  return out;
 }
 function selectLatestPerName(rows) {
   const seen = /* @__PURE__ */ new Set();
@@ -4989,7 +5082,7 @@ function renderFrontmatter(fm) {
   return lines.join("\n");
 }
 function readLocalVersion(path) {
-  if (!existsSync15(path))
+  if (!existsSync16(path))
     return null;
   try {
     const text = readFileSync12(path, "utf-8");
@@ -5009,6 +5102,8 @@ function decideAction(args) {
   return args.dryRun ? "dryrun" : "wrote";
 }
 async function runPull(opts) {
+  if (!opts.dryRun)
+    pruneOrphanedEntries();
   const sql = buildPullSql({
     tableName: opts.tableName,
     users: opts.users,
@@ -5076,8 +5171,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join18(root, dirName);
-    const skillFile = join18(skillDir, "SKILL.md");
+    const skillDir = join19(root, dirName);
+    const skillFile = join19(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -5089,13 +5184,14 @@ async function runPull(opts) {
     let manifestError;
     if (action === "wrote") {
       mkdirSync7(skillDir, { recursive: true });
-      if (existsSync15(skillFile)) {
+      if (existsSync16(skillFile)) {
         try {
           renameSync2(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
       writeFileSync9(skillFile, renderSkillFile(row));
+      const symlinks = opts.install === "global" ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root)) : [];
       try {
         recordPull({
           dirName,
@@ -5105,7 +5201,8 @@ async function runPull(opts) {
           remoteVersion,
           install: opts.install,
           installRoot: root,
-          pulledAt: (/* @__PURE__ */ new Date()).toISOString()
+          pulledAt: (/* @__PURE__ */ new Date()).toISOString(),
+          symlinks
         });
       } catch (e) {
         manifestError = e?.message ?? String(e);
@@ -5132,15 +5229,15 @@ async function runPull(opts) {
 }
 
 // dist/src/skilify/unpull.js
-import { existsSync as existsSync16, readdirSync as readdirSync3, rmSync as rmSync5, statSync as statSync3 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-import { join as join19 } from "node:path";
+import { existsSync as existsSync17, readdirSync as readdirSync3, rmSync as rmSync5, statSync as statSync3 } from "node:fs";
+import { homedir as homedir10 } from "node:os";
+import { join as join20 } from "node:path";
 function resolveUnpullRoot(install, cwd) {
   if (install === "global")
-    return join19(homedir9(), ".claude", "skills");
+    return join20(homedir10(), ".claude", "skills");
   if (!cwd)
     throw new Error("cwd required when install === 'project'");
-  return join19(cwd, ".claude", "skills");
+  return join20(cwd, ".claude", "skills");
 }
 function runUnpull(opts) {
   const root = resolveUnpullRoot(opts.install, opts.cwd);
@@ -5163,10 +5260,12 @@ function runUnpull(opts) {
   const entries = entriesForRoot(manifest, opts.install, root);
   for (const entry of entries) {
     summary.scanned++;
-    const path = join19(root, entry.dirName);
-    if (!existsSync16(path)) {
-      if (!opts.dryRun)
+    const path = join20(root, entry.dirName);
+    if (!existsSync17(path)) {
+      if (!opts.dryRun) {
+        unlinkSymlinks(entry.symlinks);
         removePullEntry(opts.install, entry.installRoot, entry.dirName);
+      }
       summary.entries.push({
         dirName: entry.dirName,
         kind: "manifest-orphan",
@@ -5203,6 +5302,7 @@ function runUnpull(opts) {
     } else {
       try {
         rmSync5(path, { recursive: true, force: true });
+        unlinkSymlinks(entry.symlinks);
         removePullEntry(opts.install, entry.installRoot, entry.dirName);
         result.action = "removed";
         summary.removed++;
@@ -5214,12 +5314,12 @@ function runUnpull(opts) {
     }
     summary.entries.push(result);
   }
-  if (existsSync16(root) && (opts.all || opts.legacyCleanup)) {
+  if (existsSync17(root) && (opts.all || opts.legacyCleanup)) {
     const manifestDirNames = new Set(entries.map((e) => e.dirName));
     for (const dirName of readdirSync3(root)) {
       if (manifestDirNames.has(dirName))
         continue;
-      const path = join19(root, dirName);
+      const path = join20(root, dirName);
       let st;
       try {
         st = statSync3(path);
@@ -5298,7 +5398,7 @@ function decideTargetForManifestEntry(entry, opts, userFilter, haveUserFilter) {
 
 // dist/src/commands/skilify.js
 function stateDir() {
-  return join20(homedir10(), ".deeplake", "state", "skilify");
+  return join21(homedir11(), ".deeplake", "state", "skilify");
 }
 function showStatus() {
   const cfg = loadScopeConfig();
@@ -5306,7 +5406,7 @@ function showStatus() {
   console.log(`team:    ${cfg.team.length === 0 ? "(empty)" : cfg.team.join(", ")}`);
   console.log(`install: ${cfg.install}  (${cfg.install === "global" ? "~/.claude/skills/" : "<project>/.claude/skills/"})`);
   const dir = stateDir();
-  if (!existsSync17(dir)) {
+  if (!existsSync18(dir)) {
     console.log(`state: (no projects tracked yet)`);
     return;
   }
@@ -5318,7 +5418,7 @@ function showStatus() {
   console.log(`state: ${files.length} project(s) tracked`);
   for (const f of files) {
     try {
-      const s = JSON.parse(readFileSync13(join20(dir, f), "utf-8"));
+      const s = JSON.parse(readFileSync13(join21(dir, f), "utf-8"));
       const skills = s.skillsGenerated.length === 0 ? "none" : s.skillsGenerated.join(", ");
       console.log(`  - ${s.project} (counter=${s.counter}, last=${s.lastDate ?? "never"}, skills=${skills})`);
     } catch {
@@ -5344,7 +5444,7 @@ function setInstall(loc) {
   }
   const cfg = loadScopeConfig();
   saveScopeConfig({ ...cfg, install: loc });
-  const path = loc === "global" ? join20(homedir10(), ".claude", "skills") : "<cwd>/.claude/skills";
+  const path = loc === "global" ? join21(homedir11(), ".claude", "skills") : "<cwd>/.claude/skills";
   console.log(`Install location set to '${loc}'. New skills will be written to ${path}/<name>/SKILL.md.`);
 }
 function promoteSkill(name, cwd) {
@@ -5352,17 +5452,17 @@ function promoteSkill(name, cwd) {
     console.error("Usage: hivemind skilify promote <skill-name>");
     process.exit(1);
   }
-  const projectPath = join20(cwd, ".claude", "skills", name);
-  const globalPath = join20(homedir10(), ".claude", "skills", name);
-  if (!existsSync17(join20(projectPath, "SKILL.md"))) {
+  const projectPath = join21(cwd, ".claude", "skills", name);
+  const globalPath = join21(homedir11(), ".claude", "skills", name);
+  if (!existsSync18(join21(projectPath, "SKILL.md"))) {
     console.error(`Skill '${name}' not found at ${projectPath}/SKILL.md`);
     process.exit(1);
   }
-  if (existsSync17(join20(globalPath, "SKILL.md"))) {
+  if (existsSync18(join21(globalPath, "SKILL.md"))) {
     console.error(`Skill '${name}' already exists at ${globalPath}/SKILL.md \u2014 refusing to overwrite. Remove it first or rename the project skill.`);
     process.exit(1);
   }
-  mkdirSync8(dirname3(globalPath), { recursive: true });
+  mkdirSync8(dirname4(globalPath), { recursive: true });
   renameSync3(projectPath, globalPath);
   console.log(`Promoted '${name}' from ${projectPath} \u2192 ${globalPath}.`);
 }
@@ -5493,7 +5593,7 @@ async function pullSkills(args) {
     console.error(`pull failed: ${e?.message ?? e}`);
     process.exit(1);
   }
-  const dest = toRaw === "global" ? join20(homedir10(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
+  const dest = toRaw === "global" ? join21(homedir11(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
   const filterDesc = users.length === 0 ? "all users" : users.join(", ");
   console.log(`Destination: ${dest}`);
   console.log(`Filter:      ${filterDesc}${skillName ? ` \xB7 skill='${skillName}'` : ""}${dryRun ? " \xB7 dry-run" : ""}${force ? " \xB7 force" : ""}`);
@@ -5543,7 +5643,7 @@ async function unpullSkills(args) {
     all,
     legacyCleanup
   });
-  const dest = toRaw === "global" ? join20(homedir10(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
+  const dest = toRaw === "global" ? join21(homedir11(), ".claude", "skills") : `${process.cwd()}/.claude/skills`;
   const filterParts = [];
   if (users.length > 0)
     filterParts.push(`users=${users.join(",")}`);
@@ -5632,13 +5732,13 @@ if (process.argv[1] && process.argv[1].endsWith("skilify.js")) {
 
 // dist/src/cli/update.js
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { existsSync as existsSync18, readFileSync as readFileSync15, realpathSync } from "node:fs";
-import { dirname as dirname5, sep } from "node:path";
+import { existsSync as existsSync19, readFileSync as readFileSync15, realpathSync } from "node:fs";
+import { dirname as dirname6, sep } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // dist/src/utils/version-check.js
 import { readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname4, join as join21 } from "node:path";
+import { dirname as dirname5, join as join22 } from "node:path";
 function isNewer(latest, current) {
   const parse = (v) => v.split(".").map(Number);
   const [la, lb, lc] = parse(latest);
@@ -5657,7 +5757,7 @@ function detectInstallKind(argv1) {
       return argv1 ?? process.argv[1] ?? fileURLToPath2(import.meta.url);
     }
   })();
-  let dir = dirname5(realArgv1);
+  let dir = dirname6(realArgv1);
   let installDir = null;
   for (let i = 0; i < 10; i++) {
     const pkgPath = `${dir}${sep}package.json`;
@@ -5669,12 +5769,12 @@ function detectInstallKind(argv1) {
       }
     } catch {
     }
-    const parent = dirname5(dir);
+    const parent = dirname6(dir);
     if (parent === dir)
       break;
     dir = parent;
   }
-  installDir ??= dirname5(realArgv1);
+  installDir ??= dirname6(realArgv1);
   if (realArgv1.includes(`${sep}_npx${sep}`) || realArgv1.includes(`${sep}.npx${sep}`)) {
     return { kind: "npx", installDir };
   }
@@ -5683,10 +5783,10 @@ function detectInstallKind(argv1) {
   }
   let gitDir = installDir;
   for (let i = 0; i < 6; i++) {
-    if (existsSync18(`${gitDir}${sep}.git`)) {
+    if (existsSync19(`${gitDir}${sep}.git`)) {
       return { kind: "local-dev", installDir };
     }
-    const parent = dirname5(gitDir);
+    const parent = dirname6(gitDir);
     if (parent === gitDir)
       break;
     gitDir = parent;

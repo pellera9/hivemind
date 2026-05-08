@@ -55,7 +55,7 @@ var init_index_marker_store = __esm({
 // dist/src/hooks/codex/session-start.js
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname as dirname3, join as join10 } from "node:path";
+import { dirname as dirname4, join as join11 } from "node:path";
 
 // dist/src/commands/auth.js
 import { execSync } from "node:child_process";
@@ -160,9 +160,9 @@ function getInstalledVersion(bundleDir, pluginManifestDir) {
 }
 
 // dist/src/skilify/auto-pull.js
-import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { join as join10 } from "node:path";
 
 // dist/src/config.js
 import { readFileSync as readFileSync3, existsSync } from "node:fs";
@@ -625,9 +625,9 @@ var DeeplakeApi = class {
 };
 
 // dist/src/skilify/pull.js
-import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, renameSync as renameSync2 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync3 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname as dirname3, join as join9 } from "node:path";
 
 // dist/src/skilify/skill-writer.js
 import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
@@ -691,7 +691,7 @@ function parseFrontmatter(text) {
 }
 
 // dist/src/skilify/manifest.js
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname2, join as join7 } from "node:path";
 function emptyManifest() {
@@ -731,6 +731,8 @@ function loadManifest(path = manifestPath()) {
         continue;
       if (e.install !== "global" && e.install !== "project")
         continue;
+      const symlinks = Array.isArray(e.symlinks) ? e.symlinks.filter((p) => typeof p === "string" && p.length > 0 && (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) && // absolute (POSIX or Windows)
+      !p.includes("..")) : [];
       entries.push({
         dirName: e.dirName,
         name: e.name,
@@ -739,7 +741,8 @@ function loadManifest(path = manifestPath()) {
         remoteVersion: typeof e.remoteVersion === "number" ? e.remoteVersion : 1,
         install: e.install,
         installRoot: e.installRoot,
-        pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : (/* @__PURE__ */ new Date()).toISOString()
+        pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : (/* @__PURE__ */ new Date()).toISOString(),
+        symlinks
       });
     }
     return { version: 1, entries };
@@ -761,6 +764,57 @@ function recordPull(entry, path = manifestPath()) {
   else
     m.entries.push(entry);
   saveManifest(m, path);
+}
+function unlinkSymlinks(paths) {
+  for (const path of paths) {
+    let st;
+    try {
+      st = lstatSync(path);
+    } catch {
+      continue;
+    }
+    if (!st.isSymbolicLink())
+      continue;
+    try {
+      unlinkSync2(path);
+    } catch {
+    }
+  }
+}
+function pruneOrphanedEntries(path = manifestPath()) {
+  const m = loadManifest(path);
+  const live = [];
+  let pruned = 0;
+  for (const e of m.entries) {
+    if (existsSync4(join7(e.installRoot, e.dirName))) {
+      live.push(e);
+      continue;
+    }
+    unlinkSymlinks(e.symlinks);
+    pruned++;
+  }
+  if (pruned > 0)
+    saveManifest({ version: 1, entries: live }, path);
+  return pruned;
+}
+
+// dist/src/skilify/agent-roots.js
+import { existsSync as existsSync5 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join8 } from "node:path";
+function candidates(home) {
+  return [
+    // agentskills.io shared root — codex installer always creates it,
+    // pi reads from it as one of two paths.
+    join8(home, ".agents", "skills"),
+    // hermes-specific root, agentskills.io-compatible layout.
+    join8(home, ".hermes", "skills"),
+    // pi's primary root (pi reads from this AND ~/.agents/skills/).
+    join8(home, ".pi", "agent", "skills")
+  ];
+}
+function detectAgentSkillsRoots(canonicalRoot, home = homedir6()) {
+  return candidates(home).filter((p) => p !== canonicalRoot && existsSync5(p));
 }
 
 // dist/src/skilify/pull.js
@@ -795,10 +849,49 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join8(homedir6(), ".claude", "skills");
+    return join9(homedir7(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join8(cwd, ".claude", "skills");
+  return join9(cwd, ".claude", "skills");
+}
+function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
+  const out = [];
+  for (const root of agentRoots) {
+    const link = join9(root, dirName);
+    let existing;
+    try {
+      existing = lstatSync2(link);
+    } catch {
+      existing = null;
+    }
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        continue;
+      }
+      let current;
+      try {
+        current = readlinkSync(link);
+      } catch {
+        current = null;
+      }
+      if (current === canonicalDir) {
+        out.push(link);
+        continue;
+      }
+      try {
+        unlinkSync3(link);
+      } catch {
+        continue;
+      }
+    }
+    try {
+      mkdirSync5(dirname3(link), { recursive: true });
+      symlinkSync(canonicalDir, link, "dir");
+      out.push(link);
+    } catch {
+    }
+  }
+  return out;
 }
 function selectLatestPerName(rows) {
   const seen = /* @__PURE__ */ new Set();
@@ -864,7 +957,7 @@ function renderFrontmatter(fm) {
   return lines.join("\n");
 }
 function readLocalVersion(path) {
-  if (!existsSync5(path))
+  if (!existsSync6(path))
     return null;
   try {
     const text = readFileSync7(path, "utf-8");
@@ -884,6 +977,8 @@ function decideAction(args) {
   return args.dryRun ? "dryrun" : "wrote";
 }
 async function runPull(opts) {
+  if (!opts.dryRun)
+    pruneOrphanedEntries();
   const sql = buildPullSql({
     tableName: opts.tableName,
     users: opts.users,
@@ -951,8 +1046,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join8(root, dirName);
-    const skillFile = join8(skillDir, "SKILL.md");
+    const skillDir = join9(root, dirName);
+    const skillFile = join9(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -964,13 +1059,14 @@ async function runPull(opts) {
     let manifestError;
     if (action === "wrote") {
       mkdirSync5(skillDir, { recursive: true });
-      if (existsSync5(skillFile)) {
+      if (existsSync6(skillFile)) {
         try {
           renameSync2(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
       writeFileSync5(skillFile, renderSkillFile(row));
+      const symlinks = opts.install === "global" ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root)) : [];
       try {
         recordPull({
           dirName,
@@ -980,7 +1076,8 @@ async function runPull(opts) {
           remoteVersion,
           install: opts.install,
           installRoot: root,
-          pulledAt: (/* @__PURE__ */ new Date()).toISOString()
+          pulledAt: (/* @__PURE__ */ new Date()).toISOString(),
+          symlinks
         });
       } catch (e) {
         manifestError = e?.message ?? String(e);
@@ -1009,10 +1106,10 @@ async function runPull(opts) {
 // dist/src/skilify/auto-pull.js
 var log3 = (msg) => log("skilify-autopull", msg);
 function stateDir() {
-  return join9(homedir7(), ".deeplake", "state", "skilify");
+  return join10(homedir8(), ".deeplake", "state", "skilify");
 }
 function timestampFile() {
-  return join9(stateDir(), "autopull-last-run.json");
+  return join10(stateDir(), "autopull-last-run.json");
 }
 var DEFAULT_INTERVAL_MIN = 30;
 var DEFAULT_TIMEOUT_MS = 5e3;
@@ -1027,7 +1124,7 @@ function readIntervalMs() {
 }
 function readLastRun() {
   const path = timestampFile();
-  if (!existsSync6(path))
+  if (!existsSync7(path))
     return null;
   try {
     const raw = readFileSync8(path, "utf-8");
@@ -1118,7 +1215,7 @@ async function maybeAutoPull(deps = {}) {
 
 // dist/src/hooks/codex/session-start.js
 var log4 = (msg) => log("codex-session-start", msg);
-var __bundleDir = dirname3(fileURLToPath(import.meta.url));
+var __bundleDir = dirname4(fileURLToPath(import.meta.url));
 var context = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents.
 
 Deeplake memory has THREE tiers \u2014 pick the right one for the question:
@@ -1176,7 +1273,7 @@ async function main() {
     log4(`credentials loaded: org=${creds.orgName ?? creds.orgId}`);
   }
   if (creds?.token) {
-    const setupScript = join10(__bundleDir, "session-start-setup.js");
+    const setupScript = join11(__bundleDir, "session-start-setup.js");
     const child = spawn("node", [setupScript], {
       detached: true,
       stdio: ["pipe", "ignore", "ignore"],
