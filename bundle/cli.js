@@ -4836,6 +4836,8 @@ function loadManifest(path = manifestPath()) {
         continue;
       if (typeof e.dirName !== "string" || !e.dirName)
         continue;
+      if (e.dirName.includes("/") || e.dirName.includes("\\") || e.dirName.includes(".."))
+        continue;
       if (typeof e.name !== "string" || !e.name)
         continue;
       if (typeof e.author !== "string")
@@ -4868,17 +4870,17 @@ function saveManifest(m, path = manifestPath()) {
 }
 function recordPull(entry, path = manifestPath()) {
   const m = loadManifest(path);
-  const idx = m.entries.findIndex((e) => e.install === entry.install && e.dirName === entry.dirName);
+  const idx = m.entries.findIndex((e) => e.install === entry.install && e.installRoot === entry.installRoot && e.dirName === entry.dirName);
   if (idx >= 0)
     m.entries[idx] = entry;
   else
     m.entries.push(entry);
   saveManifest(m, path);
 }
-function removePullEntry(install, dirName, path = manifestPath()) {
+function removePullEntry(install, installRoot, dirName, path = manifestPath()) {
   const m = loadManifest(path);
   const before = m.entries.length;
-  m.entries = m.entries.filter((e) => !(e.install === install && e.dirName === dirName));
+  m.entries = m.entries.filter((e) => !(e.install === install && e.installRoot === installRoot && e.dirName === dirName));
   if (m.entries.length !== before)
     saveManifest(m, path);
 }
@@ -5044,24 +5046,35 @@ async function runPull(opts) {
       continue;
     }
     const author = String(row.author ?? "");
-    let dirName = name;
-    if (author) {
-      try {
-        assertValidAuthor(author);
-        dirName = `${name}--${author}`;
-      } catch (e) {
-        summary.entries.push({
-          name,
-          remoteVersion: Number(row.version ?? 1),
-          localVersion: null,
-          action: "skipped",
-          destination: `(invalid author '${author}' \u2014 skipped)`,
-          author,
-          sourceAgent: String(row.source_agent ?? "")
-        });
-        summary.skipped++;
-        continue;
-      }
+    if (!author) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: "(empty author \u2014 skipped)",
+        author: "",
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
+    }
+    let dirName;
+    try {
+      assertValidAuthor(author);
+      dirName = `${name}--${author}`;
+    } catch (e) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: `(invalid author '${author}' \u2014 skipped)`,
+        author,
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
     }
     const skillDir = join18(root, dirName);
     const skillFile = join18(skillDir, "SKILL.md");
@@ -5073,6 +5086,7 @@ async function runPull(opts) {
       force: opts.force ?? false,
       dryRun: opts.dryRun ?? false
     });
+    let manifestError;
     if (action === "wrote") {
       mkdirSync7(skillDir, { recursive: true });
       if (existsSync15(skillFile)) {
@@ -5094,6 +5108,7 @@ async function runPull(opts) {
           pulledAt: (/* @__PURE__ */ new Date()).toISOString()
         });
       } catch (e) {
+        manifestError = e?.message ?? String(e);
       }
     }
     summary.entries.push({
@@ -5103,7 +5118,8 @@ async function runPull(opts) {
       action,
       destination: skillFile,
       author: String(row.author ?? ""),
-      sourceAgent: String(row.source_agent ?? "")
+      sourceAgent: String(row.source_agent ?? ""),
+      manifestError
     });
     if (action === "wrote")
       summary.wrote++;
@@ -5138,6 +5154,11 @@ function runUnpull(opts) {
   };
   const userFilter = new Set(opts.users.filter((u) => u.length > 0));
   const haveUserFilter = userFilter.size > 0;
+  if ((opts.all || opts.legacyCleanup) && (haveUserFilter || opts.notMine)) {
+    const flags = [opts.all && "--all", opts.legacyCleanup && "--legacy-cleanup"].filter(Boolean).join(" / ");
+    const filters = [haveUserFilter && "--user/--users", opts.notMine && "--not-mine"].filter(Boolean).join(" / ");
+    throw new Error(`${flags} cannot be combined with ${filters}: entries removed by ${flags} are not in the manifest and have no author metadata, so the filter would silently fail to apply. Run the filtered unpull first, then ${flags} as a separate invocation.`);
+  }
   const manifest = loadManifest();
   const entries = entriesForRoot(manifest, opts.install, root);
   for (const entry of entries) {
@@ -5145,7 +5166,7 @@ function runUnpull(opts) {
     const path = join19(root, entry.dirName);
     if (!existsSync16(path)) {
       if (!opts.dryRun)
-        removePullEntry(opts.install, entry.dirName);
+        removePullEntry(opts.install, entry.installRoot, entry.dirName);
       summary.entries.push({
         dirName: entry.dirName,
         kind: "manifest-orphan",
@@ -5182,7 +5203,7 @@ function runUnpull(opts) {
     } else {
       try {
         rmSync5(path, { recursive: true, force: true });
-        removePullEntry(opts.install, entry.dirName);
+        removePullEntry(opts.install, entry.installRoot, entry.dirName);
         result.action = "removed";
         summary.removed++;
       } catch (e) {
@@ -5276,17 +5297,20 @@ function decideTargetForManifestEntry(entry, opts, userFilter, haveUserFilter) {
 }
 
 // dist/src/commands/skilify.js
-var STATE_DIR2 = join20(homedir10(), ".deeplake", "state", "skilify");
+function stateDir() {
+  return join20(homedir10(), ".deeplake", "state", "skilify");
+}
 function showStatus() {
   const cfg = loadScopeConfig();
   console.log(`scope:   ${cfg.scope}`);
   console.log(`team:    ${cfg.team.length === 0 ? "(empty)" : cfg.team.join(", ")}`);
   console.log(`install: ${cfg.install}  (${cfg.install === "global" ? "~/.claude/skills/" : "<project>/.claude/skills/"})`);
-  if (!existsSync17(STATE_DIR2)) {
+  const dir = stateDir();
+  if (!existsSync17(dir)) {
     console.log(`state: (no projects tracked yet)`);
     return;
   }
-  const files = readdirSync4(STATE_DIR2).filter((f) => f.endsWith(".json") && f !== "config.json");
+  const files = readdirSync4(dir).filter((f) => f.endsWith(".json") && f !== "config.json" && f !== "pulled.json");
   if (files.length === 0) {
     console.log(`state: (no projects tracked yet)`);
     return;
@@ -5294,7 +5318,7 @@ function showStatus() {
   console.log(`state: ${files.length} project(s) tracked`);
   for (const f of files) {
     try {
-      const s = JSON.parse(readFileSync13(join20(STATE_DIR2, f), "utf-8"));
+      const s = JSON.parse(readFileSync13(join20(dir, f), "utf-8"));
       const skills = s.skillsGenerated.length === 0 ? "none" : s.skillsGenerated.join(", ");
       console.log(`  - ${s.project} (counter=${s.counter}, last=${s.lastDate ?? "never"}, skills=${skills})`);
     } catch {
@@ -5478,6 +5502,9 @@ async function pullSkills(args) {
     const tag = e.action === "wrote" ? "\u2713 wrote" : e.action === "dryrun" ? "\u2192 would write" : "\xB7 skipped";
     const ver = e.localVersion === null ? `v${e.remoteVersion} (new)` : `v${e.localVersion} \u2192 v${e.remoteVersion}`;
     console.log(`  ${tag.padEnd(15)} ${e.name.padEnd(40)} ${ver.padEnd(20)} (${e.author}/${e.sourceAgent})`);
+    if (e.manifestError) {
+      console.warn(`    \u26A0 manifest not updated: ${e.manifestError} \u2014 \`unpull\` will not see this entry until a successful repull.`);
+    }
   }
   console.log(`Result: ${summary.wrote} written, ${summary.dryrun} dry-run, ${summary.skipped} skipped.`);
 }
@@ -5498,15 +5525,19 @@ async function unpullSkills(args) {
     users = [userOne];
   else if (usersMany)
     users = usersMany.split(",").map((s) => s.trim()).filter(Boolean);
-  const config = loadConfig();
-  if (!config) {
-    throw new Error("Not logged in. Run: hivemind login");
+  let myUsername;
+  if (notMine) {
+    const config = loadConfig();
+    if (!config) {
+      throw new Error("--not-mine requires a logged-in user. Run: hivemind login");
+    }
+    myUsername = config.userName;
   }
   const summary = runUnpull({
     install: toRaw,
     cwd: toRaw === "project" ? process.cwd() : void 0,
     users,
-    myUsername: config.userName,
+    myUsername,
     notMine,
     dryRun,
     all,
