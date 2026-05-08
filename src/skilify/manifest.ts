@@ -17,7 +17,7 @@
  * intact (no torn JSON).
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { InstallLocation } from "./scope-config.js";
@@ -39,6 +39,18 @@ export interface PulledEntry {
   installRoot: string;
   /** ISO timestamp of the pull. */
   pulledAt: string;
+  /**
+   * Absolute paths of symlinks fanned out at pull time, one per detected
+   * non-Claude agent root (`~/.agents/skills/<dirName>`,
+   * `~/.hermes/skills/<dirName>`, …). Source of truth for `unpull` to
+   * remove the links without rescanning the disk and for the orphan
+   * sweep to clean up dangling links when the canonical dir is gone.
+   *
+   * Always absolute, never empty strings, no path traversal — same
+   * defensive validation as `dirName` because a corrupted manifest could
+   * otherwise convince `unpull` to `unlinkSync` arbitrary files.
+   */
+  symlinks: string[];
 }
 
 export interface PulledManifest {
@@ -79,6 +91,21 @@ export function loadManifest(path: string = manifestPath()): PulledManifest {
       if (typeof e.author !== "string") continue;
       if (typeof e.installRoot !== "string" || !e.installRoot) continue;
       if (e.install !== "global" && e.install !== "project") continue;
+      // Validate symlinks list. Every entry must be (a) a string, (b)
+      // absolute, and (c) free of `..` traversal. Anything else is dropped
+      // silently — same defensive posture as the dirName validator above:
+      // a corrupted manifest must not let `unpull` unlink arbitrary paths.
+      // A missing/wrong-type field becomes an empty array (back-compat with
+      // manifests written before symlink fan-out existed).
+      const symlinks: string[] = Array.isArray(e.symlinks)
+        ? e.symlinks.filter(
+            (p: unknown): p is string =>
+              typeof p === "string" &&
+              p.length > 0 &&
+              (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) && // absolute (POSIX or Windows)
+              !p.includes(".."),
+          )
+        : [];
       entries.push({
         dirName: e.dirName,
         name: e.name,
@@ -88,6 +115,7 @@ export function loadManifest(path: string = manifestPath()): PulledManifest {
         install: e.install,
         installRoot: e.installRoot,
         pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : new Date().toISOString(),
+        symlinks,
       });
     }
     return { version: 1, entries };
@@ -163,4 +191,52 @@ export function removePullEntry(
  */
 export function entriesForRoot(m: PulledManifest, install: InstallLocation, installRoot: string): PulledEntry[] {
   return m.entries.filter(e => e.install === install && e.installRoot === installRoot);
+}
+
+/**
+ * Best-effort unlink of every recorded fan-out symlink. Anything that is
+ * NOT a symbolic link at the recorded path is left untouched — the user
+ * may have replaced it after the pull, and an old manifest record isn't
+ * authority enough to delete user content.
+ *
+ * Per-path failures don't propagate; a stuck link is preferable to
+ * leaving a manifest entry that points at a path the cleanup couldn't
+ * reach. Caller drops the manifest row regardless.
+ */
+export function unlinkSymlinks(paths: readonly string[]): void {
+  for (const path of paths) {
+    let st;
+    try { st = lstatSync(path); } catch { continue; }   // already gone
+    if (!st.isSymbolicLink()) continue;                 // user-replaced, leave alone
+    try { unlinkSync(path); } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Walk the full manifest and prune any entry whose `installRoot/dirName`
+ * no longer exists on disk. Useful at the start of `runPull` to clean up
+ * after a user who `rm -rf`-ed a canonical skill dir by hand: the entry's
+ * recorded fan-out symlinks would now be dangling, the manifest row
+ * would be a phantom, and unpull (filter-aware) wouldn't visit it.
+ *
+ * Returns the number of entries pruned. Idempotent: zero entries pruned
+ * means zero disk writes (saveManifest only fires when something
+ * actually changed).
+ */
+export function pruneOrphanedEntries(path: string = manifestPath()): number {
+  const m = loadManifest(path);
+  const live: PulledEntry[] = [];
+  let pruned = 0;
+  for (const e of m.entries) {
+    if (existsSync(join(e.installRoot, e.dirName))) {
+      live.push(e);
+      continue;
+    }
+    // Canonical dir is gone — cleanup any dangling symlinks recorded for
+    // this entry, then drop the row.
+    unlinkSymlinks(e.symlinks);
+    pruned++;
+  }
+  if (pruned > 0) saveManifest({ version: 1, entries: live }, path);
+  return pruned;
 }

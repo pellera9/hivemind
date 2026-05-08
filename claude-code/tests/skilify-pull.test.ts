@@ -9,11 +9,14 @@ import {
   renderSkillFile,
   readLocalVersion,
   decideAction,
+  fanOutSymlinks,
   runPull,
   isMissingTableError,
   assertValidAuthor,
   type QueryFn,
 } from "../../src/skilify/pull.js";
+import { lstatSync, readlinkSync, symlinkSync } from "node:fs";
+import { loadManifest } from "../../src/skilify/manifest.js";
 
 let projectRoot: string;
 let projectSkillsRoot: string;
@@ -524,5 +527,158 @@ describe("runPull", () => {
     const skipped = summary.entries.find(e => e.action === "skipped");
     expect(skipped?.destination).toMatch(/empty author/i);
     expect(skipped?.author).toBe("");
+  });
+});
+
+// ── fanOutSymlinks ─────────────────────────────────────────────────────────
+
+describe("fanOutSymlinks", () => {
+  it("creates symlinks pointing at canonicalDir for every existing agent root", () => {
+    const canonical = join(fakeHome, ".claude", "skills", "deploy--alice");
+    mkdirSync(canonical, { recursive: true });
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    const hermesRoot = join(fakeHome, ".hermes", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    mkdirSync(hermesRoot, { recursive: true });
+
+    const created = fanOutSymlinks(canonical, "deploy--alice", [agentsRoot, hermesRoot]);
+
+    expect(created).toEqual([
+      join(agentsRoot, "deploy--alice"),
+      join(hermesRoot, "deploy--alice"),
+    ]);
+    expect(lstatSync(created[0]).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(created[0])).toBe(canonical);
+    expect(lstatSync(created[1]).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(created[1])).toBe(canonical);
+  });
+
+  it("is idempotent: a correctly-pointing symlink is left in place and reported as created", () => {
+    const canonical = join(fakeHome, ".claude", "skills", "deploy--alice");
+    mkdirSync(canonical, { recursive: true });
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    // First call: creates the link
+    fanOutSymlinks(canonical, "deploy--alice", [agentsRoot]);
+    // Second call: must not error and must still report the link
+    const created = fanOutSymlinks(canonical, "deploy--alice", [agentsRoot]);
+    expect(created).toEqual([join(agentsRoot, "deploy--alice")]);
+  });
+
+  it("replaces a stale symlink that points elsewhere", () => {
+    const canonical = join(fakeHome, ".claude", "skills", "deploy--alice");
+    const stale = join(fakeHome, "stale-target");
+    mkdirSync(canonical, { recursive: true });
+    mkdirSync(stale, { recursive: true });
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    // Pre-existing symlink to a different target
+    symlinkSync(stale, join(agentsRoot, "deploy--alice"), "dir");
+
+    const created = fanOutSymlinks(canonical, "deploy--alice", [agentsRoot]);
+
+    expect(created).toEqual([join(agentsRoot, "deploy--alice")]);
+    expect(readlinkSync(created[0])).toBe(canonical);
+  });
+
+  it("refuses to clobber a real directory at the link path", () => {
+    const canonical = join(fakeHome, ".claude", "skills", "deploy--alice");
+    mkdirSync(canonical, { recursive: true });
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    const conflicting = join(agentsRoot, "deploy--alice");
+    mkdirSync(conflicting, { recursive: true });
+    // Drop a marker file inside so we can prove it stays.
+    writeFileSync(join(conflicting, "marker"), "user content");
+
+    const created = fanOutSymlinks(canonical, "deploy--alice", [agentsRoot]);
+
+    // Real directory left alone, not in the returned list
+    expect(created).toEqual([]);
+    expect(lstatSync(conflicting).isDirectory()).toBe(true);
+    expect(readFileSync(join(conflicting, "marker"), "utf-8")).toBe("user content");
+  });
+
+  it("returns an empty list when no agent roots are passed", () => {
+    expect(fanOutSymlinks("/whatever", "x--y", [])).toEqual([]);
+  });
+});
+
+// ── runPull symlink fan-out (integration) ─────────────────────────────────
+
+describe("runPull — symlink fan-out (global install only)", () => {
+  const sampleRow = (over: Partial<Record<string, unknown>> = {}) => ({
+    name: "deploy",
+    project: "p",
+    project_key: "pk",
+    body: "## Workflow\n\nDeploy.",
+    version: 1,
+    source_agent: "claude_code",
+    scope: "org",
+    author: "alice",
+    description: "Deploy skill",
+    trigger_text: "When deploying",
+    source_sessions: '["s1"]',
+    install: "global",
+    created_at: "2026-05-08T00:00:00.000Z",
+    updated_at: "2026-05-08T00:00:00.000Z",
+    ...over,
+  });
+
+  it("fans out symlinks to detected agent roots and records them in the manifest", async () => {
+    // Pretend codex + hermes are installed.
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    const hermesRoot = join(fakeHome, ".hermes", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    mkdirSync(hermesRoot, { recursive: true });
+
+    const { fn } = makeMockQuery([sampleRow()]);
+    const summary = await runPull({
+      query: fn, tableName: "skills", install: "global",
+      users: [], dryRun: false, force: false,
+    });
+    expect(summary.wrote).toBe(1);
+
+    const canonical = join(fakeHome, ".claude", "skills", "deploy--alice");
+    expect(existsSync(join(canonical, "SKILL.md"))).toBe(true);
+    expect(readlinkSync(join(agentsRoot, "deploy--alice"))).toBe(canonical);
+    expect(readlinkSync(join(hermesRoot, "deploy--alice"))).toBe(canonical);
+
+    const m = loadManifest();
+    expect(m.entries).toHaveLength(1);
+    expect(m.entries[0].symlinks).toEqual([
+      join(agentsRoot, "deploy--alice"),
+      join(hermesRoot, "deploy--alice"),
+    ]);
+  });
+
+  it("does NOT fan out for project-install pulls (project scope shouldn't leak globally)", async () => {
+    // Even with agent roots present, a project install should not symlink
+    // into ~/.agents/skills — that would expose project-local skills to
+    // every project on the machine.
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+
+    const { fn } = makeMockQuery([sampleRow()]);
+    await runPull({
+      query: fn, tableName: "skills", install: "project", cwd: projectRoot,
+      users: [], dryRun: false, force: false,
+    });
+
+    expect(existsSync(join(projectSkillsRoot, "deploy--alice", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(agentsRoot, "deploy--alice"))).toBe(false);
+
+    const m = loadManifest();
+    expect(m.entries[0].symlinks).toEqual([]);
+  });
+
+  it("records empty symlinks[] when no agent roots are detected", async () => {
+    // No ~/.agents/skills, no ~/.hermes/skills, no ~/.pi/agent/skills.
+    const { fn } = makeMockQuery([sampleRow()]);
+    await runPull({
+      query: fn, tableName: "skills", install: "global",
+      users: [], dryRun: false, force: false,
+    });
+    const m = loadManifest();
+    expect(m.entries[0].symlinks).toEqual([]);
   });
 });
