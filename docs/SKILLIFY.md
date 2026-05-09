@@ -80,6 +80,18 @@ Drift handling: if a manifest entry's directory was deleted out-of-band (e.g. `r
 
 Cross-project caveat: same `(name, author)` from two different projects collides on disk under the new flat layout — the more recently pulled row wins, and the prior `SKILL.md` is preserved as `SKILL.md.bak`. The underlying row stays in the Deeplake `skills` table, so re-pulling from the other project recovers it.
 
+## Auto-pull at SessionStart
+
+Every supported agent (Claude Code, Codex, Cursor, Hermes, pi) auto-runs the equivalent of `hivemind skillify pull --all-users --to global` at the start of every session, so teammate-mined skills become available without anyone having to remember to run pull manually.
+
+There is no throttle window. File writes inside `runPull` are idempotent (skipped when the local SKILL.md version is at-or-newer than remote), symlink fan-out is `lstat`-checked, and manifest writes are dedup'd — so the per-call cost is one SQL round-trip plus a handful of `existsSync` syscalls when nothing has changed. Bounded by a 5-second timeout so a slow Deeplake never blocks SessionStart. All failures (network, missing table, auth) are swallowed silently and the session starts regardless.
+
+The pull writes canonically to `~/.claude/skills/<name>--<author>/SKILL.md` and fans out symlinks into every detected non-Claude agent skill root (`~/.agents/skills/`, `~/.hermes/skills/`, `~/.pi/agent/skills/`) so Codex / Hermes / pi discover the same skill without an extra copy on disk. Symlink targets are recorded per-entry in the manifest, so `unpull` reverses the fan-out without rescanning the filesystem.
+
+| Env var                            | Default | Effect                                  |
+|------------------------------------|---------|-----------------------------------------|
+| `HIVEMIND_AUTOPULL_DISABLED`       | unset   | Set to `1` to disable auto-pull entirely. |
+
 ## Configuration
 
 | Env var                              | Default | Effect                                                  |

@@ -27,7 +27,10 @@ import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InstallLocation } from "./scope-config.js";
-import { entriesForRoot, loadManifest, removePullEntry, type PulledEntry } from "./manifest.js";
+import {
+  entriesForRoot, loadManifest, removePullEntry, unlinkSymlinks,
+  type PulledEntry,
+} from "./manifest.js";
 
 export interface UnpullOptions {
   /** Where to scan. */
@@ -111,11 +114,17 @@ export function runUnpull(opts: UnpullOptions): UnpullSummary {
     const path = join(root, entry.dirName);
 
     if (!existsSync(path)) {
-      // Drift: manifest says it was here, disk disagrees. Prune the entry.
-      // Use the entry's own installRoot rather than the resolved `root` so
-      // we drop exactly the row that pointed here, even if a parallel pull
-      // wrote a same-named skill into a different installRoot.
-      if (!opts.dryRun) removePullEntry(opts.install, entry.installRoot, entry.dirName);
+      // Drift: manifest says it was here, disk disagrees. Prune the entry,
+      // and clean up any symlinks that may now be dangling (canonical dir
+      // is gone; agent-root links recorded at pull time would point at a
+      // missing target). Use the entry's own installRoot rather than the
+      // resolved `root` so we drop exactly the row that pointed here, even
+      // if a parallel pull wrote a same-named skill into a different
+      // installRoot.
+      if (!opts.dryRun) {
+        unlinkSymlinks(entry.symlinks);
+        removePullEntry(opts.install, entry.installRoot, entry.dirName);
+      }
       summary.entries.push({
         dirName: entry.dirName,
         kind: "manifest-orphan",
@@ -153,6 +162,10 @@ export function runUnpull(opts: UnpullOptions): UnpullSummary {
     } else {
       try {
         rmSync(path, { recursive: true, force: true });
+        // Reverse the pull-time fan-out before dropping the manifest row:
+        // once the row is gone we lose the list of agent-root links, so
+        // unlink first then prune the row.
+        unlinkSymlinks(entry.symlinks);
         removePullEntry(opts.install, entry.installRoot, entry.dirName);
         result.action = "removed";
         summary.removed++;

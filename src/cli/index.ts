@@ -69,6 +69,12 @@ Skill management (mine + share reusable Claude skills across the org):
                                            Options: --user <email>, --users a,b,c,
                                            --all-users, --to <project|global>,
                                            --dry-run, --force.
+                                           Note: every agent's SessionStart hook
+                                           auto-runs 'pull --all-users --to global'
+                                           on every session. File writes are
+                                           idempotent (skipped when local is
+                                           at-or-newer than remote). Disable via
+                                           HIVEMIND_AUTOPULL_DISABLED=1.
   hivemind skilify unpull                  Remove skills previously installed by pull.
                                            Options: --user, --users, --not-mine,
                                            --to <project|global>, --dry-run,

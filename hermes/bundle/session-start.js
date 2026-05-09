@@ -53,7 +53,7 @@ var init_index_marker_store = __esm({
 
 // dist/src/hooks/hermes/session-start.js
 import { fileURLToPath } from "node:url";
-import { dirname as dirname2 } from "node:path";
+import { dirname as dirname4 } from "node:path";
 
 // dist/src/commands/auth.js
 import { execSync } from "node:child_process";
@@ -670,9 +670,581 @@ async function autoUpdate(creds, opts) {
   log3(`agent=${opts.agent} dispatched (pid=${pid ?? "?"}) (${Date.now() - t0}ms total)`);
 }
 
+// dist/src/skilify/pull.js
+import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync3 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname as dirname3, join as join10 } from "node:path";
+
+// dist/src/skilify/skill-writer.js
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join7 } from "node:path";
+function assertValidSkillName(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`invalid skill name: empty or non-string`);
+  }
+  if (name.length > 100) {
+    throw new Error(`invalid skill name: too long (${name.length} chars)`);
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+    throw new Error(`invalid skill name: contains path separator or '..': ${name}`);
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`invalid skill name: must be kebab-case (lowercase a-z, 0-9, hyphen): ${name}`);
+  }
+}
+function parseFrontmatter(text) {
+  if (!text.startsWith("---\n") && !text.startsWith("---\r\n"))
+    return null;
+  const end = text.indexOf("\n---", 4);
+  if (end < 0)
+    return null;
+  const head = text.slice(4, end).trim();
+  const body = text.slice(end + 4).replace(/^\r?\n/, "");
+  const fm = { source_sessions: [] };
+  let mode = "kv";
+  for (const raw of head.split(/\r?\n/)) {
+    if (mode === "sources") {
+      const m2 = raw.match(/^\s+-\s+(.+)$/);
+      if (m2) {
+        fm.source_sessions.push(m2[1].trim());
+        continue;
+      }
+      mode = "kv";
+    }
+    if (raw.startsWith("source_sessions:")) {
+      mode = "sources";
+      continue;
+    }
+    const m = raw.match(/^([a-zA-Z_]+):\s*(.*)$/);
+    if (!m)
+      continue;
+    const [, k, v] = m;
+    let val = v;
+    if (v.startsWith('"') && v.endsWith('"')) {
+      try {
+        val = JSON.parse(v);
+      } catch {
+      }
+    } else if (k === "version") {
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n))
+        val = n;
+    }
+    fm[k] = val;
+  }
+  return { fm, body };
+}
+
+// dist/src/skilify/manifest.js
+import { existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname2, join as join8 } from "node:path";
+function emptyManifest() {
+  return { version: 1, entries: [] };
+}
+function manifestPath() {
+  return join8(homedir5(), ".deeplake", "state", "skilify", "pulled.json");
+}
+function loadManifest(path = manifestPath()) {
+  if (!existsSync5(path))
+    return emptyManifest();
+  let raw;
+  try {
+    raw = readFileSync6(path, "utf-8");
+  } catch {
+    return emptyManifest();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object")
+      return emptyManifest();
+    if (parsed.version !== 1 || !Array.isArray(parsed.entries))
+      return emptyManifest();
+    const entries = [];
+    for (const e of parsed.entries) {
+      if (!e || typeof e !== "object")
+        continue;
+      if (typeof e.dirName !== "string" || !e.dirName)
+        continue;
+      if (e.dirName.includes("/") || e.dirName.includes("\\") || e.dirName.includes(".."))
+        continue;
+      if (typeof e.name !== "string" || !e.name)
+        continue;
+      if (typeof e.author !== "string")
+        continue;
+      if (typeof e.installRoot !== "string" || !e.installRoot)
+        continue;
+      if (e.install !== "global" && e.install !== "project")
+        continue;
+      const symlinks = Array.isArray(e.symlinks) ? e.symlinks.filter((p) => typeof p === "string" && p.length > 0 && (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) && // absolute (POSIX or Windows)
+      !p.includes("..")) : [];
+      entries.push({
+        dirName: e.dirName,
+        name: e.name,
+        author: e.author,
+        projectKey: typeof e.projectKey === "string" ? e.projectKey : "",
+        remoteVersion: typeof e.remoteVersion === "number" ? e.remoteVersion : 1,
+        install: e.install,
+        installRoot: e.installRoot,
+        pulledAt: typeof e.pulledAt === "string" ? e.pulledAt : (/* @__PURE__ */ new Date()).toISOString(),
+        symlinks
+      });
+    }
+    return { version: 1, entries };
+  } catch {
+    return emptyManifest();
+  }
+}
+function saveManifest(m, path = manifestPath()) {
+  mkdirSync4(dirname2(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync4(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
+  renameSync(tmp, path);
+}
+function recordPull(entry, path = manifestPath()) {
+  const m = loadManifest(path);
+  const idx = m.entries.findIndex((e) => e.install === entry.install && e.installRoot === entry.installRoot && e.dirName === entry.dirName);
+  if (idx >= 0)
+    m.entries[idx] = entry;
+  else
+    m.entries.push(entry);
+  saveManifest(m, path);
+}
+function entriesForRoot(m, install, installRoot) {
+  return m.entries.filter((e) => e.install === install && e.installRoot === installRoot);
+}
+function unlinkSymlinks(paths) {
+  for (const path of paths) {
+    let st;
+    try {
+      st = lstatSync(path);
+    } catch {
+      continue;
+    }
+    if (!st.isSymbolicLink())
+      continue;
+    try {
+      unlinkSync2(path);
+    } catch {
+    }
+  }
+}
+function pruneOrphanedEntries(path = manifestPath()) {
+  const m = loadManifest(path);
+  const live = [];
+  let pruned = 0;
+  for (const e of m.entries) {
+    if (existsSync5(join8(e.installRoot, e.dirName))) {
+      live.push(e);
+      continue;
+    }
+    unlinkSymlinks(e.symlinks);
+    pruned++;
+  }
+  if (pruned > 0)
+    saveManifest({ version: 1, entries: live }, path);
+  return pruned;
+}
+
+// dist/src/skilify/agent-roots.js
+import { existsSync as existsSync6 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join9 } from "node:path";
+function resolveDetected(home) {
+  const out = [];
+  const codexInstalled = existsSync6(join9(home, ".codex"));
+  const piInstalled = existsSync6(join9(home, ".pi", "agent"));
+  const hermesInstalled = existsSync6(join9(home, ".hermes"));
+  if (codexInstalled || piInstalled) {
+    out.push(join9(home, ".agents", "skills"));
+  }
+  if (hermesInstalled) {
+    out.push(join9(home, ".hermes", "skills"));
+  }
+  if (piInstalled) {
+    out.push(join9(home, ".pi", "agent", "skills"));
+  }
+  return out;
+}
+function detectAgentSkillsRoots(canonicalRoot, home = homedir6()) {
+  return resolveDetected(home).filter((p) => p !== canonicalRoot);
+}
+
+// dist/src/skilify/pull.js
+function assertValidAuthor(author) {
+  if (!author)
+    throw new Error("author is empty");
+  if (author.length > 64)
+    throw new Error(`author too long (${author.length}): ${author.slice(0, 32)}\u2026`);
+  if (!/^[A-Za-z0-9_.\-@]+$/.test(author)) {
+    throw new Error(`author contains invalid characters: ${author}`);
+  }
+}
+function esc(s) {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "''").replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+function buildPullSql(args) {
+  const where = [];
+  if (args.users.length > 0) {
+    const list = args.users.map((u) => `'${esc(u)}'`).join(", ");
+    where.push(`author IN (${list})`);
+  }
+  if (args.skillName) {
+    where.push(`name = '${esc(args.skillName)}'`);
+  }
+  const whereClause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
+  return `SELECT name, project, project_key, body, version, source_agent, scope, author, description, trigger_text, source_sessions, install, created_at, updated_at FROM "${args.tableName}"${whereClause} ORDER BY project_key ASC, name ASC, version DESC`;
+}
+function isMissingTableError(message) {
+  if (!message)
+    return false;
+  return /Table does not exist|relation .* does not exist|no such table/i.test(message);
+}
+function resolvePullDestination(install, cwd) {
+  if (install === "global")
+    return join10(homedir7(), ".claude", "skills");
+  if (!cwd)
+    throw new Error("install=project requires a cwd");
+  return join10(cwd, ".claude", "skills");
+}
+function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
+  const out = [];
+  for (const root of agentRoots) {
+    const link = join10(root, dirName);
+    let existing;
+    try {
+      existing = lstatSync2(link);
+    } catch {
+      existing = null;
+    }
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        continue;
+      }
+      let current;
+      try {
+        current = readlinkSync(link);
+      } catch {
+        current = null;
+      }
+      if (current === canonicalDir) {
+        out.push(link);
+        continue;
+      }
+      try {
+        unlinkSync3(link);
+      } catch {
+        continue;
+      }
+    }
+    try {
+      mkdirSync5(dirname3(link), { recursive: true });
+      symlinkSync(canonicalDir, link, "dir");
+      out.push(link);
+    } catch {
+    }
+  }
+  return out;
+}
+function backfillSymlinks(installRoot) {
+  const manifest = loadManifest();
+  const entries = entriesForRoot(manifest, "global", installRoot);
+  if (entries.length === 0)
+    return;
+  const detected = detectAgentSkillsRoots(installRoot);
+  for (const entry of entries) {
+    const canonical = join10(entry.installRoot, entry.dirName);
+    if (!existsSync7(canonical))
+      continue;
+    const fresh = fanOutSymlinks(canonical, entry.dirName, detected);
+    if (sameSorted(fresh, entry.symlinks))
+      continue;
+    try {
+      recordPull({ ...entry, symlinks: fresh });
+    } catch {
+    }
+  }
+}
+function sameSorted(a, b) {
+  if (a.length !== b.length)
+    return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++)
+    if (sa[i] !== sb[i])
+      return false;
+  return true;
+}
+function selectLatestPerName(rows) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const r of rows) {
+    const name = String(r.name ?? "");
+    const projectKey = String(r.project_key ?? "");
+    if (!name)
+      continue;
+    const key = `${projectKey}\0${name}`;
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+function renderSkillFile(row) {
+  const sources = parseSourceSessions(row.source_sessions);
+  const fm = {
+    name: String(row.name ?? ""),
+    description: String(row.description ?? ""),
+    trigger: typeof row.trigger_text === "string" && row.trigger_text.length > 0 ? String(row.trigger_text) : void 0,
+    source_sessions: sources,
+    version: Number(row.version ?? 1),
+    created_by_agent: String(row.source_agent ?? "unknown"),
+    created_at: String(row.created_at ?? (/* @__PURE__ */ new Date()).toISOString()),
+    updated_at: String(row.updated_at ?? (/* @__PURE__ */ new Date()).toISOString())
+  };
+  const body = String(row.body ?? "").trim();
+  return `${renderFrontmatter(fm)}
+
+${body}
+`;
+}
+function parseSourceSessions(v) {
+  if (Array.isArray(v))
+    return v.map(String);
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed))
+        return parsed.map(String);
+    } catch {
+    }
+  }
+  return [];
+}
+function renderFrontmatter(fm) {
+  const lines = ["---"];
+  lines.push(`name: ${fm.name}`);
+  lines.push(`description: ${JSON.stringify(fm.description)}`);
+  if (fm.trigger)
+    lines.push(`trigger: ${JSON.stringify(fm.trigger)}`);
+  lines.push(`source_sessions:`);
+  for (const s of fm.source_sessions)
+    lines.push(`  - ${s}`);
+  lines.push(`version: ${fm.version}`);
+  lines.push(`created_by_agent: ${fm.created_by_agent}`);
+  lines.push(`created_at: ${fm.created_at}`);
+  lines.push(`updated_at: ${fm.updated_at}`);
+  lines.push("---");
+  return lines.join("\n");
+}
+function readLocalVersion(path) {
+  if (!existsSync7(path))
+    return null;
+  try {
+    const text = readFileSync7(path, "utf-8");
+    const parsed = parseFrontmatter(text);
+    if (!parsed)
+      return null;
+    const v = parsed.fm.version;
+    return typeof v === "number" ? v : null;
+  } catch {
+    return null;
+  }
+}
+function decideAction(args) {
+  const shouldWrite = args.localVersion === null || args.remoteVersion > args.localVersion || args.force;
+  if (!shouldWrite)
+    return "skipped";
+  return args.dryRun ? "dryrun" : "wrote";
+}
+async function runPull(opts) {
+  if (!opts.dryRun)
+    pruneOrphanedEntries();
+  const sql = buildPullSql({
+    tableName: opts.tableName,
+    users: opts.users,
+    skillName: opts.skillName
+  });
+  let rows = [];
+  try {
+    rows = await opts.query(sql);
+  } catch (e) {
+    if (isMissingTableError(e?.message))
+      rows = [];
+    else
+      throw e;
+  }
+  const latest = selectLatestPerName(rows);
+  const root = resolvePullDestination(opts.install, opts.cwd);
+  const summary = { scanned: latest.length, wrote: 0, skipped: 0, dryrun: 0, entries: [] };
+  for (const row of latest) {
+    const name = String(row.name ?? "");
+    if (!name)
+      continue;
+    try {
+      assertValidSkillName(name);
+    } catch (e) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: "(invalid name \u2014 skipped)",
+        author: String(row.author ?? ""),
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
+    }
+    const author = String(row.author ?? "");
+    if (!author) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: "(empty author \u2014 skipped)",
+        author: "",
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
+    }
+    let dirName;
+    try {
+      assertValidAuthor(author);
+      dirName = `${name}--${author}`;
+    } catch (e) {
+      summary.entries.push({
+        name,
+        remoteVersion: Number(row.version ?? 1),
+        localVersion: null,
+        action: "skipped",
+        destination: `(invalid author '${author}' \u2014 skipped)`,
+        author,
+        sourceAgent: String(row.source_agent ?? "")
+      });
+      summary.skipped++;
+      continue;
+    }
+    const skillDir = join10(root, dirName);
+    const skillFile = join10(skillDir, "SKILL.md");
+    const remoteVersion = Number(row.version ?? 1);
+    const localVersion = readLocalVersion(skillFile);
+    const action = decideAction({
+      remoteVersion,
+      localVersion,
+      force: opts.force ?? false,
+      dryRun: opts.dryRun ?? false
+    });
+    let manifestError;
+    if (action === "wrote") {
+      mkdirSync5(skillDir, { recursive: true });
+      if (existsSync7(skillFile)) {
+        try {
+          renameSync2(skillFile, `${skillFile}.bak`);
+        } catch {
+        }
+      }
+      writeFileSync5(skillFile, renderSkillFile(row));
+      const symlinks = opts.install === "global" ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root)) : [];
+      try {
+        recordPull({
+          dirName,
+          name,
+          author,
+          projectKey: String(row.project_key ?? ""),
+          remoteVersion,
+          install: opts.install,
+          installRoot: root,
+          pulledAt: (/* @__PURE__ */ new Date()).toISOString(),
+          symlinks
+        });
+      } catch (e) {
+        manifestError = e?.message ?? String(e);
+      }
+    }
+    summary.entries.push({
+      name,
+      remoteVersion,
+      localVersion,
+      action,
+      destination: skillFile,
+      author: String(row.author ?? ""),
+      sourceAgent: String(row.source_agent ?? ""),
+      manifestError
+    });
+    if (action === "wrote")
+      summary.wrote++;
+    else if (action === "dryrun")
+      summary.dryrun++;
+    else
+      summary.skipped++;
+  }
+  if (!opts.dryRun && opts.install === "global") {
+    backfillSymlinks(root);
+  }
+  return summary;
+}
+
+// dist/src/skilify/auto-pull.js
+var log4 = (msg) => log("skilify-autopull", msg);
+var DEFAULT_TIMEOUT_MS = 5e3;
+function withTimeout(p, ms) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`autopull timeout after ${ms}ms`)), ms);
+    if (typeof timer.unref === "function")
+      timer.unref();
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer)
+      clearTimeout(timer);
+  });
+}
+async function autoPullSkills(deps = {}) {
+  if (process.env.HIVEMIND_AUTOPULL_DISABLED === "1") {
+    log4("disabled via HIVEMIND_AUTOPULL_DISABLED=1");
+    return { pulled: 0, skipped: true, reason: "disabled" };
+  }
+  const loadFn = deps.loadConfigFn ?? loadConfig;
+  const config = loadFn();
+  if (!config) {
+    log4("skipped: not logged in");
+    return { pulled: 0, skipped: true, reason: "not-logged-in" };
+  }
+  let query;
+  if (deps.queryFn) {
+    query = deps.queryFn;
+  } else {
+    const api = new DeeplakeApi(config.token, config.apiUrl, config.orgId, config.workspaceId, config.skillsTableName);
+    query = (sql) => api.query(sql);
+  }
+  const install = deps.install ?? "global";
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  try {
+    const summary = await withTimeout(runPull({
+      query,
+      tableName: config.skillsTableName,
+      install,
+      cwd: install === "project" ? deps.cwd ?? process.cwd() : void 0,
+      users: [],
+      dryRun: false,
+      force: false
+    }), timeoutMs);
+    log4(`pulled scanned=${summary.scanned} wrote=${summary.wrote} skipped=${summary.skipped}`);
+    return { pulled: summary.wrote, skipped: false };
+  } catch (e) {
+    log4(`pull failed (swallowed): ${e?.message ?? e}`);
+    return { pulled: 0, skipped: true, reason: "error" };
+  }
+}
+
 // dist/src/hooks/hermes/session-start.js
-var log4 = (msg) => log("hermes-session-start", msg);
-var __bundleDir = dirname2(fileURLToPath(import.meta.url));
+var log5 = (msg) => log("hermes-session-start", msg);
+var __bundleDir = dirname4(fileURLToPath(import.meta.url));
 var context = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents.
 
 Structure: index.md (start here) \u2192 summaries/*.md \u2192 sessions/*.jsonl (last resort). Do NOT jump straight to JSONL.
@@ -745,12 +1317,14 @@ async function main() {
         await api.ensureTable();
         await api.ensureSessionsTable(config.sessionsTableName);
         await createPlaceholder(api, config.tableName, sessionId, cwd, config.userName, config.orgName, config.workspaceId);
-        log4("placeholder created");
+        log5("placeholder created");
       }
     } catch (e) {
-      log4(`placeholder failed: ${e.message}`);
+      log5(`placeholder failed: ${e.message}`);
     }
   }
+  const pullResult = await autoPullSkills();
+  log5(`autopull: pulled=${pullResult.pulled} skipped=${pullResult.skipped}`);
   let versionNotice = "";
   const current = getInstalledVersion(__bundleDir, ".claude-plugin");
   if (current)
@@ -762,6 +1336,6 @@ Not logged in to Deeplake. Run: hivemind login${versionNotice}`;
   console.log(JSON.stringify({ context: additional }));
 }
 main().catch((e) => {
-  log4(`fatal: ${e.message}`);
+  log5(`fatal: ${e.message}`);
   process.exit(0);
 });

@@ -18,6 +18,7 @@ import { log as _log } from "../utils/debug.js";
 import { getInstalledVersion } from "../utils/version-check.js";
 import { makeWikiLogger } from "../utils/wiki-log.js";
 import { autoUpdate } from "./shared/autoupdate.js";
+import { autoPullSkills } from "../skilify/auto-pull.js";
 const log = (msg: string) => _log("session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -183,6 +184,17 @@ async function main(): Promise<void> {
       wikiLog(`SessionStart: placeholder failed for ${input.session_id}: ${e.message}`);
     }
   }
+
+  // Auto-pull skills from all org users into ~/.claude/skills/ on every
+  // SessionStart. File writes inside runPull are idempotent (skipped
+  // when local version is at-or-newer than remote), so re-running each
+  // session is cheap on disk; the only per-call cost is the SQL
+  // round-trip. Bounded by a 5s timeout so a slow Deeplake never
+  // freezes SessionStart. Hard opt-out via HIVEMIND_AUTOPULL_DISABLED=1.
+  // All failures swallowed inside autoPullSkills (documented as
+  // never-rejecting), so no try/catch needed here.
+  const pullResult = await autoPullSkills();
+  log(`autopull: pulled=${pullResult.pulled} skipped=${pullResult.skipped}`);
 
   // Version notice in additionalContext — informational only; the
   // upgrade-applied signal goes to stderr from inside autoUpdate (which

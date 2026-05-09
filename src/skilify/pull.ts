@@ -17,12 +17,16 @@
  *   - if local version >= remote version → skip (use --force to override)
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import {
+  existsSync, readFileSync, writeFileSync, mkdirSync, renameSync,
+  lstatSync, readlinkSync, symlinkSync, unlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { assertValidSkillName, parseFrontmatter, type SkillFrontmatter } from "./skill-writer.js";
 import type { InstallLocation } from "./scope-config.js";
-import { recordPull } from "./manifest.js";
+import { entriesForRoot, loadManifest, pruneOrphanedEntries, recordPull } from "./manifest.js";
+import { detectAgentSkillsRoots } from "./agent-roots.js";
 
 /**
  * Tighter-than-skill-name validator for the author segment that becomes a
@@ -150,6 +154,119 @@ export function resolvePullDestination(install: InstallLocation, cwd?: string): 
 }
 
 /**
+ * Make `<root>/<dirName>` point at `canonicalDir` for each detected
+ * non-Claude agent root. Returns the absolute paths of every symlink
+ * that ended up pointing correctly (existing or newly created), in the
+ * order of `agentRoots`. Caller stores this in the manifest entry so
+ * unpull can reverse the fan-out without rescanning the disk.
+ *
+ * Refusal cases (path NOT in the returned list, no exception thrown):
+ *  - A non-symlink file or directory already sits at the link path. We
+ *    never clobber user data; the user gets the canonical copy under
+ *    `~/.claude/skills/` and is responsible for the conflicting entry.
+ *  - symlink() raises (Windows non-developer mode, read-only fs,
+ *    permission denied). The skill is still on disk under the canonical
+ *    location; auto-pull retries on the next session.
+ *
+ * Idempotency: re-running the same pull with the same agentRoots is a
+ * no-op for links that already point at the right target. Stale links
+ * (pointing at a different canonical path — e.g. after a HOME move) are
+ * unlinked and recreated.
+ */
+export function fanOutSymlinks(
+  canonicalDir: string,
+  dirName: string,
+  agentRoots: string[],
+): string[] {
+  const out: string[] = [];
+  for (const root of agentRoots) {
+    const link = join(root, dirName);
+    let existing;
+    try { existing = lstatSync(link); } catch { existing = null; }
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        // Real file/directory at the target — never clobber. Skip silently;
+        // the user can resolve the conflict by removing it and re-running pull.
+        continue;
+      }
+      // Already a symlink. Replace only if it points elsewhere.
+      let current: string | null;
+      try { current = readlinkSync(link); } catch { current = null; }
+      if (current === canonicalDir) {
+        out.push(link);
+        continue;
+      }
+      try { unlinkSync(link); } catch { continue; }
+    }
+    try {
+      mkdirSync(dirname(link), { recursive: true });
+      // "dir" type matters on Windows (junction vs file symlink); ignored on POSIX.
+      symlinkSync(canonicalDir, link, "dir");
+      out.push(link);
+    } catch {
+      // Best-effort. The canonical dir exists either way; skip this agent root.
+    }
+  }
+  return out;
+}
+
+/**
+ * Walk every manifest entry under `installRoot` and ensure each one has
+ * fan-out symlinks pointing at the canonical dir for every currently-
+ * detected agent skill root. Updates the entry's `symlinks[]` in the
+ * manifest if the resolved set differs from the recorded one.
+ *
+ * Why this exists: the per-row fan-out inside the main pull loop only
+ * runs for rows whose action is `"wrote"`. Skills already up-to-date
+ * locally take the `"skipped"` path, which doesn't refresh symlinks.
+ * That breaks two real scenarios:
+ *
+ *   1. User installs a NEW agent (codex / hermes / pi) AFTER having
+ *      already pulled skills. Without backfill, those existing skills
+ *      stay invisible to the new agent until each one is independently
+ *      bumped on the org table.
+ *   2. User manually `rm`-s a single fan-out symlink. Without backfill,
+ *      it stays missing forever (or until the source row's version
+ *      bumps).
+ *
+ * Idempotent: when the on-disk fan-out matches the recorded set,
+ * skip the manifest write entirely. The hot-path cost is one
+ * `lstat` per (entry × detected root) pair plus three `existsSync`
+ * calls in `detectAgentSkillsRoots`. For ~50 entries × 3 roots that's
+ * ~150 syscalls, negligible.
+ *
+ * Skips entries whose canonical dir is missing — those are pruned by
+ * `pruneOrphanedEntries()` at the start of `runPull`, so by the time
+ * this runs the survivors all have a real canonical dir on disk.
+ */
+export function backfillSymlinks(installRoot: string): void {
+  const manifest = loadManifest();
+  const entries = entriesForRoot(manifest, "global", installRoot);
+  if (entries.length === 0) return;
+  const detected = detectAgentSkillsRoots(installRoot);
+  for (const entry of entries) {
+    const canonical = join(entry.installRoot, entry.dirName);
+    if (!existsSync(canonical)) continue; // pruned/orphan, leave alone
+    const fresh = fanOutSymlinks(canonical, entry.dirName, detected);
+    if (sameSorted(fresh, entry.symlinks)) continue; // no change, no write
+    try {
+      recordPull({ ...entry, symlinks: fresh });
+    } catch {
+      // Manifest write failed — leave the entry stale. Next runPull
+      // will retry; the symlinks themselves are already correct on disk.
+    }
+  }
+}
+
+function sameSorted(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+  return true;
+}
+
+/**
  * From the rows returned by the SELECT, keep only the highest-version
  * row per (project_key, name). The SQL already orders by
  * (project_key ASC, name ASC, version DESC), so the first row seen for a
@@ -263,6 +380,13 @@ export function decideAction(args: {
  * prevents cross-project overwrites.
  */
 export async function runPull(opts: PullOptions): Promise<PullSummary> {
+  // Sweep stale manifest entries before fetching: anything whose canonical
+  // dir was rm-ed by hand has dangling fan-out symlinks that need to go,
+  // and a phantom row would otherwise survive into this pull's manifest
+  // upserts. Skip on dry-run — a dry-run must not mutate disk state.
+  // No-op (zero writes) when nothing is stale.
+  if (!opts.dryRun) pruneOrphanedEntries();
+
   const sql = buildPullSql({
     tableName: opts.tableName,
     users: opts.users,
@@ -356,8 +480,17 @@ export async function runPull(opts: PullOptions): Promise<PullSummary> {
         try { renameSync(skillFile, `${skillFile}.bak`); } catch { /* best effort */ }
       }
       writeFileSync(skillFile, renderSkillFile(row));
+      // Fan out symlinks into every detected non-Claude agent skills
+      // root, but only for global pulls. Project-local pulls live under
+      // <cwd>/.claude/skills and shouldn't leak into user-global agent
+      // dirs — that would defeat the project-scoping intent.
+      const symlinks = opts.install === "global"
+        ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root))
+        : [];
       // Record in manifest so `unpull` can identify this entry as
-      // pull-managed without relying on the `--<author>` dirname heuristic.
+      // pull-managed without relying on the `--<author>` dirname heuristic
+      // and so the symlinks created above can be reversed by a single
+      // manifest-driven unlink pass.
       try {
         recordPull({
           dirName,
@@ -368,6 +501,7 @@ export async function runPull(opts: PullOptions): Promise<PullSummary> {
           install: opts.install,
           installRoot: root,
           pulledAt: new Date().toISOString(),
+          symlinks,
         });
       } catch (e: any) {
         // Skill is on disk but the manifest didn't record it — surface
@@ -392,6 +526,19 @@ export async function runPull(opts: PullOptions): Promise<PullSummary> {
     if (action === "wrote") summary.wrote++;
     else if (action === "dryrun") summary.dryrun++;
     else summary.skipped++;
+  }
+
+  // Backfill fan-out for skills that were already up-to-date this run.
+  // Per-row fan-out only fires on `action === "wrote"`, so when a user
+  // installs a NEW agent (codex / hermes / pi) AFTER having pulled, the
+  // existing skills' canonical dirs are present but their symlinks in
+  // the new agent root are missing — and they'd stay missing forever
+  // because the next pull just sees `localVersion >= remoteVersion`
+  // and skips. The backfill closes this gap idempotently.
+  // Skip on dry-run (no disk mutations) and on project installs (no
+  // fan-out for them by design).
+  if (!opts.dryRun && opts.install === "global") {
+    backfillSymlinks(root);
   }
 
   return summary;

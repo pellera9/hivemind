@@ -26,12 +26,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync,
-  openSync, closeSync, constants as fsConstants,
+  openSync, closeSync, renameSync, constants as fsConstants,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { connect } from "node:net";
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 // ---------- diagnostic logging --------------------------------------------------
@@ -209,7 +209,47 @@ const PI_WIKI_WORKER_PATH = join(homedir(), ".pi", "agent", "hivemind", "wiki-wo
 // Spawned on session_shutdown to mine reusable Claude skills from the just-
 // finished session. Same shared bundle used by CC/Codex/Cursor/Hermes.
 const PI_SKILIFY_WORKER_PATH = join(homedir(), ".pi", "agent", "hivemind", "skilify-worker.js");
-const SKILIFY_STATE_DIR = join(homedir(), ".deeplake", "state", "skilify");
+// Auto-pull worker installed alongside wiki-worker / skilify-worker by
+// `hivemind pi install`. Spawned synchronously on session_start to fetch
+// all-author skills from the org table. The worker is a thin wrapper
+// around the shared autoPullSkills() that codex / cursor / hermes call
+// directly — pi can't import the TS module (raw .ts, zero deps), so it
+// routes through this child process. Keeps pi's pulled skills layout +
+// symlink fan-out in lockstep with the other agents automatically.
+const PI_AUTOPULL_WORKER_PATH = join(homedir(), ".pi", "agent", "hivemind", "autopull-worker.js");
+
+/**
+ * Synchronously run the bundled auto-pull worker. Bounded by a 6s
+ * wall-clock cap (the worker's internal timeout is 5s; the extra second
+ * is defence-in-depth for spawn overhead). Returns when the worker
+ * exits, regardless of exit code — autoPullSkills is documented as
+ * never-rejecting and the worker swallows all failures, so a non-zero
+ * exit code can only mean an unrecoverable runtime error that we want
+ * to ignore here too. Pi's session_start blocks on this, mirroring the
+ * `await autoPullSkills()` in the other agents.
+ */
+function runAutopullWorker(): void {
+  if (!existsSync(PI_AUTOPULL_WORKER_PATH)) {
+    logHm(`autopull: worker bundle missing at ${PI_AUTOPULL_WORKER_PATH} — skipping`);
+    return;
+  }
+  try {
+    const result = spawnSync(process.execPath, [PI_AUTOPULL_WORKER_PATH], {
+      stdio: "ignore",
+      timeout: 6_000,
+      env: process.env,
+    });
+    if (result.error) {
+      logHm(`autopull: spawn failed (swallowed): ${result.error.message}`);
+    } else if (result.signal) {
+      logHm(`autopull: worker killed by signal ${result.signal} (likely the 6s cap)`);
+    } else {
+      logHm(`autopull: worker exited code=${result.status}`);
+    }
+  } catch (e: any) {
+    logHm(`autopull: spawn threw (swallowed): ${e?.message ?? e}`);
+  }
+}
 
 interface SummaryState {
   lastSummaryAt: number;
@@ -850,6 +890,15 @@ export default function hivemindExtension(pi: ExtensionAPI): void {
       }
       logHm(`session_start: sessions table visible=${visible} (probe took ${Date.now() - start}ms)`);
     }
+
+    // Auto-pull all-author skills via the bundled worker (same shared
+    // autoPullSkills as codex / cursor / hermes — see runAutopullWorker
+    // above). Synchronous so freshly pulled skills are visible to pi
+    // before the first prompt; 6s upper bound. Throttling, layout, and
+    // per-agent symlink fan-out all live in the worker — no inline
+    // duplicate maintained here.
+    if (creds) runAutopullWorker();
+
     const additional = creds
       ? `${CONTEXT_PREAMBLE}\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId}).`
       : `${CONTEXT_PREAMBLE}\nNot logged in to Deeplake. Run \`hivemind login\` to authenticate.`;

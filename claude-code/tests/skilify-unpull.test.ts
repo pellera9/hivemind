@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync,
+  symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordPull, loadManifest } from "../../src/skilify/manifest.js";
@@ -27,7 +30,7 @@ afterEach(() => {
 });
 
 /** Create a fake skill directory + record it in the manifest. */
-function plantPulledSkill(dirName: string, author: string, name: string): void {
+function plantPulledSkill(dirName: string, author: string, name: string, symlinks: string[] = []): void {
   const dir = join(projectSkillsRoot, dirName);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\nversion: 1\n---\nbody`);
@@ -38,6 +41,7 @@ function plantPulledSkill(dirName: string, author: string, name: string): void {
     install: "project",
     installRoot: projectSkillsRoot,
     pulledAt: "2026-05-07T00:00:00Z",
+    symlinks,
   });
 }
 
@@ -218,5 +222,74 @@ describe("runUnpull filter+all conflict guard", () => {
     expect(() => runUnpull({
       install: "project", cwd: projectRoot, users: ["alice"],
     })).not.toThrow();
+  });
+});
+
+// ── symlink fan-out reversal ───────────────────────────────────────────────
+
+describe("runUnpull — symlink unlink", () => {
+  /** Plant a pulled skill plus a symlink record in the manifest. Returns the link path. */
+  function plantWithSymlink(dirName: string, author: string, name: string): { canonical: string; link: string } {
+    const canonical = join(projectSkillsRoot, dirName);
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    const link = join(agentsRoot, dirName);
+    plantPulledSkill(dirName, author, name, [link]);
+    symlinkSync(canonical, link, "dir");
+    return { canonical, link };
+  }
+
+  it("unlinks every recorded symlink when removing a manifest entry", () => {
+    const { link } = plantWithSymlink("deploy--alice", "alice", "deploy");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+
+    const r = runUnpull({ install: "project", cwd: projectRoot, users: [] });
+
+    expect(r.removed).toBe(1);
+    expect(existsSync(join(projectSkillsRoot, "deploy--alice"))).toBe(false);
+    // The symlink target is gone AND the link itself is removed (not left dangling).
+    expect(existsSync(link)).toBe(false);
+    let lst;
+    try { lst = lstatSync(link); } catch { lst = null; }
+    expect(lst).toBeNull();
+  });
+
+  it("dry-run does NOT unlink symlinks", () => {
+    const { link } = plantWithSymlink("deploy--alice", "alice", "deploy");
+    runUnpull({ install: "project", cwd: projectRoot, users: [], dryRun: true });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  it("manifest-orphan prune (canonical dir already gone) also unlinks dangling recorded symlinks", () => {
+    const { canonical, link } = plantWithSymlink("deploy--alice", "alice", "deploy");
+    // Simulate the user `rm -rf`-ing the canonical dir by hand.
+    rmSync(canonical, { recursive: true });
+    // Symlink is now dangling.
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+
+    const r = runUnpull({ install: "project", cwd: projectRoot, users: [] });
+
+    expect(r.manifestPruned).toBe(1);
+    expect(loadManifest().entries).toHaveLength(0);
+    let lst;
+    try { lst = lstatSync(link); } catch { lst = null; }
+    expect(lst).toBeNull();
+  });
+
+  it("leaves a non-symlink at the recorded path alone (never clobbers user content)", () => {
+    // Plant a pulled skill, then replace what should be a symlink with a real file.
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    const fakeLink = join(agentsRoot, "deploy--alice");
+    plantPulledSkill("deploy--alice", "alice", "deploy", [fakeLink]);
+    writeFileSync(fakeLink, "user replaced this with their own file");
+
+    const r = runUnpull({ install: "project", cwd: projectRoot, users: [] });
+
+    expect(r.removed).toBe(1);
+    expect(loadManifest().entries).toHaveLength(0);
+    // The user's file at the recorded path stays — we don't trust an old
+    // manifest record enough to delete a non-symlink.
+    expect(lstatSync(fakeLink).isFile()).toBe(true);
   });
 });

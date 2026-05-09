@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
+  symlinkSync, writeFileSync, statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +12,8 @@ import {
   removePullEntry,
   entriesForRoot,
   manifestPath,
+  pruneOrphanedEntries,
+  unlinkSymlinks,
   type PulledEntry,
 } from "../../src/skilify/manifest.js";
 
@@ -36,6 +41,7 @@ const sampleEntry = (over: Partial<PulledEntry> = {}): PulledEntry => ({
   install: "global",
   installRoot: "/home/test/.claude/skills",
   pulledAt: "2026-05-07T00:00:00.000Z",
+  symlinks: [],
   ...over,
 });
 
@@ -221,6 +227,163 @@ describe("removePullEntry", () => {
     recordPull(sampleEntry({ install: "project", dirName: "deploy--alice", installRoot: "/projA" }));
     removePullEntry("project", "/wrong-root", "deploy--alice");
     expect(loadManifest().entries).toHaveLength(1);
+  });
+});
+
+describe("unlinkSymlinks", () => {
+  it("removes paths that are symlinks", () => {
+    const target = join(fakeHome, "target");
+    mkdirSync(target, { recursive: true });
+    const link = join(fakeHome, "link");
+    symlinkSync(target, link, "dir");
+    unlinkSymlinks([link]);
+    let lst;
+    try { lst = lstatSync(link); } catch { lst = null; }
+    expect(lst).toBeNull();
+    expect(existsSync(target)).toBe(true);  // target untouched
+  });
+
+  it("ignores missing paths silently", () => {
+    expect(() => unlinkSymlinks([join(fakeHome, "does-not-exist")])).not.toThrow();
+  });
+
+  it("never removes a non-symlink (real file or directory)", () => {
+    const realFile = join(fakeHome, "real-file");
+    writeFileSync(realFile, "user content");
+    const realDir = join(fakeHome, "real-dir");
+    mkdirSync(realDir, { recursive: true });
+    unlinkSymlinks([realFile, realDir]);
+    expect(readFileSync(realFile, "utf-8")).toBe("user content");
+    expect(existsSync(realDir)).toBe(true);
+  });
+});
+
+describe("pruneOrphanedEntries", () => {
+  it("returns 0 and writes nothing when manifest is empty", () => {
+    expect(pruneOrphanedEntries()).toBe(0);
+    expect(existsSync(manifestPath())).toBe(false);
+  });
+
+  it("returns 0 when every entry's canonical dir exists on disk", () => {
+    const root = mkdtempSync(join(tmpdir(), "manifest-prune-live-"));
+    mkdirSync(join(root, "deploy--alice"), { recursive: true });
+    recordPull(sampleEntry({ install: "global", installRoot: root, dirName: "deploy--alice" }));
+    expect(pruneOrphanedEntries()).toBe(0);
+    expect(loadManifest().entries).toHaveLength(1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("drops entries whose canonical dir is gone and unlinks their recorded symlinks", () => {
+    const root = mkdtempSync(join(tmpdir(), "manifest-prune-orphan-"));
+    const agentsRoot = join(fakeHome, ".agents", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    const link = join(agentsRoot, "deploy--alice");
+    // canonical dir EXISTS at first, then we'll rm it to simulate user `rm -rf`
+    const canonical = join(root, "deploy--alice");
+    mkdirSync(canonical, { recursive: true });
+    symlinkSync(canonical, link, "dir");
+    recordPull(sampleEntry({
+      install: "global", installRoot: root, dirName: "deploy--alice",
+      symlinks: [link],
+    }));
+    rmSync(canonical, { recursive: true });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);  // dangling
+
+    expect(pruneOrphanedEntries()).toBe(1);
+
+    expect(loadManifest().entries).toHaveLength(0);
+    let lst;
+    try { lst = lstatSync(link); } catch { lst = null; }
+    expect(lst).toBeNull();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps live entries while pruning orphans (mixed manifest)", () => {
+    const root = mkdtempSync(join(tmpdir(), "manifest-prune-mixed-"));
+    mkdirSync(join(root, "live--alice"), { recursive: true });
+    // dead entry: canonical never created
+    recordPull(sampleEntry({ install: "global", installRoot: root, dirName: "dead--bob",  name: "dead", author: "bob" }));
+    recordPull(sampleEntry({ install: "global", installRoot: root, dirName: "live--alice", name: "live", author: "alice" }));
+
+    expect(pruneOrphanedEntries()).toBe(1);
+
+    const m = loadManifest();
+    expect(m.entries).toHaveLength(1);
+    expect(m.entries[0].dirName).toBe("live--alice");
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("symlinks field", () => {
+  it("round-trips an entry with non-empty symlinks", () => {
+    const entry = sampleEntry({
+      symlinks: [
+        "/home/test/.agents/skills/deploy--alice",
+        "/home/test/.hermes/skills/deploy--alice",
+      ],
+    });
+    saveManifest({ version: 1, entries: [entry] });
+    expect(loadManifest().entries[0].symlinks).toEqual(entry.symlinks);
+  });
+
+  it("treats a missing symlinks field as an empty array (back-compat)", () => {
+    // Manifests written before this field existed have no `symlinks` key.
+    // Loading must not error; the entry must come back with symlinks: [].
+    saveManifest({ version: 1, entries: [] });
+    writeFileSync(manifestPath(), JSON.stringify({
+      version: 1,
+      entries: [{
+        dirName: "old--bob",
+        name: "old",
+        author: "bob",
+        projectKey: "p",
+        remoteVersion: 1,
+        install: "global",
+        installRoot: "/h/.claude/skills",
+        pulledAt: "2026-01-01T00:00:00Z",
+        // no symlinks field at all
+      }],
+    }));
+    const m = loadManifest();
+    expect(m.entries).toHaveLength(1);
+    expect(m.entries[0].symlinks).toEqual([]);
+  });
+
+  it("drops non-string / relative / traversal-containing symlink paths", () => {
+    // A corrupted (or hand-edited) manifest must not give unpull
+    // arbitrary unlink targets. The validator drops anything that
+    // isn't an absolute path with no `..` segments.
+    saveManifest({ version: 1, entries: [] });
+    writeFileSync(manifestPath(), JSON.stringify({
+      version: 1,
+      entries: [{
+        ...sampleEntry({ dirName: "a--alice" }),
+        symlinks: [
+          "/home/test/.agents/skills/a--alice", // ok
+          "../../etc/passwd",                   // relative + traversal — drop
+          "relative/path",                      // relative — drop
+          "/home/test/../../escape",            // contains `..` — drop
+          "",                                   // empty — drop
+          42,                                   // wrong type — drop
+          null,                                 // wrong type — drop
+          "/home/test/.hermes/skills/a--alice", // ok
+        ],
+      }],
+    }));
+    const m = loadManifest();
+    expect(m.entries[0].symlinks).toEqual([
+      "/home/test/.agents/skills/a--alice",
+      "/home/test/.hermes/skills/a--alice",
+    ]);
+  });
+
+  it("treats a non-array symlinks field as empty (defensive)", () => {
+    saveManifest({ version: 1, entries: [] });
+    writeFileSync(manifestPath(), JSON.stringify({
+      version: 1,
+      entries: [{ ...sampleEntry({ dirName: "x--alice" }), symlinks: "not-an-array" }],
+    }));
+    expect(loadManifest().entries[0].symlinks).toEqual([]);
   });
 });
 

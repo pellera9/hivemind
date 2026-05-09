@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __esm = (fn, res) => function __init() {
@@ -17,21 +16,21 @@ __export(index_marker_store_exports, {
   hasFreshIndexMarker: () => hasFreshIndexMarker,
   writeIndexMarker: () => writeIndexMarker
 });
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "node:fs";
+import { join as join3 } from "node:path";
 import { tmpdir } from "node:os";
 function getIndexMarkerDir() {
-  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join5(tmpdir(), "hivemind-deeplake-indexes");
+  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join3(tmpdir(), "hivemind-deeplake-indexes");
 }
 function buildIndexMarkerPath(workspaceId, orgId, table, suffix) {
   const markerKey = [workspaceId, orgId, table, suffix].join("__").replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return join5(getIndexMarkerDir(), `${markerKey}.json`);
+  return join3(getIndexMarkerDir(), `${markerKey}.json`);
 }
 function hasFreshIndexMarker(markerPath) {
   if (!existsSync2(markerPath))
     return false;
   try {
-    const raw = JSON.parse(readFileSync4(markerPath, "utf-8"));
+    const raw = JSON.parse(readFileSync2(markerPath, "utf-8"));
     const updatedAt = raw.updatedAt ? new Date(raw.updatedAt).getTime() : NaN;
     if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > INDEX_MARKER_TTL_MS)
       return false;
@@ -41,8 +40,8 @@ function hasFreshIndexMarker(markerPath) {
   }
 }
 function writeIndexMarker(markerPath) {
-  mkdirSync2(getIndexMarkerDir(), { recursive: true });
-  writeFileSync2(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
+  mkdirSync(getIndexMarkerDir(), { recursive: true });
+  writeFileSync(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
 }
 var INDEX_MARKER_TTL_MS;
 var init_index_marker_store = __esm({
@@ -52,124 +51,17 @@ var init_index_marker_store = __esm({
   }
 });
 
-// dist/src/hooks/codex/session-start.js
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname as dirname4, join as join10 } from "node:path";
-
-// dist/src/commands/auth.js
-import { execSync } from "node:child_process";
-
-// dist/src/utils/client-header.js
-var DEEPLAKE_CLIENT_HEADER = "X-Deeplake-Client";
-function deeplakeClientValue() {
-  return "hivemind";
-}
-function deeplakeClientHeader() {
-  return { [DEEPLAKE_CLIENT_HEADER]: deeplakeClientValue() };
-}
-
-// dist/src/commands/auth-creds.js
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-function configDir() {
-  return join(homedir(), ".deeplake");
-}
-function credsPath() {
-  return join(configDir(), "credentials.json");
-}
-function loadCredentials() {
-  try {
-    return JSON.parse(readFileSync(credsPath(), "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-// dist/src/utils/stdin.js
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    process.stdin.setEncoding("utf-8");
-    process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => {
-      try {
-        resolve(JSON.parse(data));
-      } catch (err) {
-        reject(new Error(`Failed to parse hook input: ${err}`));
-      }
-    });
-    process.stdin.on("error", reject);
-  });
-}
-
-// dist/src/utils/debug.js
-import { appendFileSync } from "node:fs";
-import { join as join2 } from "node:path";
-import { homedir as homedir2 } from "node:os";
-var DEBUG = process.env.HIVEMIND_DEBUG === "1";
-var LOG = join2(homedir2(), ".deeplake", "hook-debug.log");
-function log(tag, msg) {
-  if (!DEBUG)
-    return;
-  appendFileSync(LOG, `${(/* @__PURE__ */ new Date()).toISOString()} [${tag}] ${msg}
-`);
-}
-
-// dist/src/utils/version-check.js
-import { readFileSync as readFileSync2 } from "node:fs";
-import { dirname, join as join3 } from "node:path";
-function getInstalledVersion(bundleDir, pluginManifestDir) {
-  try {
-    const pluginJson = join3(bundleDir, "..", pluginManifestDir, "plugin.json");
-    const plugin = JSON.parse(readFileSync2(pluginJson, "utf-8"));
-    if (plugin.version)
-      return plugin.version;
-  } catch {
-  }
-  try {
-    const stamp = readFileSync2(join3(bundleDir, "..", ".hivemind_version"), "utf-8").trim();
-    if (stamp)
-      return stamp;
-  } catch {
-  }
-  const HIVEMIND_PKG_NAMES = /* @__PURE__ */ new Set([
-    "hivemind",
-    "hivemind-codex",
-    "@deeplake/hivemind",
-    "@deeplake/hivemind-codex",
-    "@activeloop/hivemind",
-    "@activeloop/hivemind-codex"
-  ]);
-  let dir = bundleDir;
-  for (let i = 0; i < 5; i++) {
-    const candidate = join3(dir, "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync2(candidate, "utf-8"));
-      if (HIVEMIND_PKG_NAMES.has(pkg.name) && pkg.version)
-        return pkg.version;
-    } catch {
-    }
-    const parent = dirname(dir);
-    if (parent === dir)
-      break;
-    dir = parent;
-  }
-  return null;
-}
-
 // dist/src/config.js
-import { readFileSync as readFileSync3, existsSync } from "node:fs";
-import { join as join4 } from "node:path";
-import { homedir as homedir3, userInfo } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir, userInfo } from "node:os";
 function loadConfig() {
-  const home = homedir3();
-  const credPath = join4(home, ".deeplake", "credentials.json");
+  const home = homedir();
+  const credPath = join(home, ".deeplake", "credentials.json");
   let creds = null;
   if (existsSync(credPath)) {
     try {
-      creds = JSON.parse(readFileSync3(credPath, "utf-8"));
+      creds = JSON.parse(readFileSync(credPath, "utf-8"));
     } catch {
       return null;
     }
@@ -188,12 +80,25 @@ function loadConfig() {
     tableName: process.env.HIVEMIND_TABLE ?? "memory",
     sessionsTableName: process.env.HIVEMIND_SESSIONS_TABLE ?? "sessions",
     skillsTableName: process.env.HIVEMIND_SKILLS_TABLE ?? "skills",
-    memoryPath: process.env.HIVEMIND_MEMORY_PATH ?? join4(home, ".deeplake", "memory")
+    memoryPath: process.env.HIVEMIND_MEMORY_PATH ?? join(home, ".deeplake", "memory")
   };
 }
 
 // dist/src/deeplake-api.js
 import { randomUUID } from "node:crypto";
+
+// dist/src/utils/debug.js
+import { appendFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+var DEBUG = process.env.HIVEMIND_DEBUG === "1";
+var LOG = join2(homedir2(), ".deeplake", "hook-debug.log");
+function log(tag, msg) {
+  if (!DEBUG)
+    return;
+  appendFileSync(LOG, `${(/* @__PURE__ */ new Date()).toISOString()} [${tag}] ${msg}
+`);
+}
 
 // dist/src/utils/sql.js
 function sqlStr(value) {
@@ -209,6 +114,15 @@ function sqlIdent(name) {
 // dist/src/embeddings/columns.js
 var SUMMARY_EMBEDDING_COL = "summary_embedding";
 var MESSAGE_EMBEDDING_COL = "message_embedding";
+
+// dist/src/utils/client-header.js
+var DEEPLAKE_CLIENT_HEADER = "X-Deeplake-Client";
+function deeplakeClientValue() {
+  return "hivemind";
+}
+function deeplakeClientHeader() {
+  return { [DEEPLAKE_CLIENT_HEADER]: deeplakeClientValue() };
+}
 
 // dist/src/deeplake-api.js
 var indexMarkerStorePromise = null;
@@ -620,14 +534,14 @@ var DeeplakeApi = class {
 };
 
 // dist/src/skilify/pull.js
-import { existsSync as existsSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync3 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { dirname as dirname3, join as join9 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync4, mkdirSync as mkdirSync4, renameSync as renameSync2, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { dirname as dirname2, join as join7 } from "node:path";
 
 // dist/src/skilify/skill-writer.js
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, readdirSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
 function assertValidSkillName(name) {
   if (typeof name !== "string" || name.length === 0) {
     throw new Error(`invalid skill name: empty or non-string`);
@@ -686,21 +600,21 @@ function parseFrontmatter(text) {
 }
 
 // dist/src/skilify/manifest.js
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname, join as join5 } from "node:path";
 function emptyManifest() {
   return { version: 1, entries: [] };
 }
 function manifestPath() {
-  return join7(homedir5(), ".deeplake", "state", "skilify", "pulled.json");
+  return join5(homedir4(), ".deeplake", "state", "skilify", "pulled.json");
 }
 function loadManifest(path = manifestPath()) {
   if (!existsSync4(path))
     return emptyManifest();
   let raw;
   try {
-    raw = readFileSync6(path, "utf-8");
+    raw = readFileSync4(path, "utf-8");
   } catch {
     return emptyManifest();
   }
@@ -746,9 +660,9 @@ function loadManifest(path = manifestPath()) {
   }
 }
 function saveManifest(m, path = manifestPath()) {
-  mkdirSync4(dirname2(path), { recursive: true });
+  mkdirSync3(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
-  writeFileSync4(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
+  writeFileSync3(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
   renameSync(tmp, path);
 }
 function recordPull(entry, path = manifestPath()) {
@@ -774,7 +688,7 @@ function unlinkSymlinks(paths) {
     if (!st.isSymbolicLink())
       continue;
     try {
-      unlinkSync2(path);
+      unlinkSync(path);
     } catch {
     }
   }
@@ -784,7 +698,7 @@ function pruneOrphanedEntries(path = manifestPath()) {
   const live = [];
   let pruned = 0;
   for (const e of m.entries) {
-    if (existsSync4(join7(e.installRoot, e.dirName))) {
+    if (existsSync4(join5(e.installRoot, e.dirName))) {
       live.push(e);
       continue;
     }
@@ -798,25 +712,25 @@ function pruneOrphanedEntries(path = manifestPath()) {
 
 // dist/src/skilify/agent-roots.js
 import { existsSync as existsSync5 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { join as join8 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { join as join6 } from "node:path";
 function resolveDetected(home) {
   const out = [];
-  const codexInstalled = existsSync5(join8(home, ".codex"));
-  const piInstalled = existsSync5(join8(home, ".pi", "agent"));
-  const hermesInstalled = existsSync5(join8(home, ".hermes"));
+  const codexInstalled = existsSync5(join6(home, ".codex"));
+  const piInstalled = existsSync5(join6(home, ".pi", "agent"));
+  const hermesInstalled = existsSync5(join6(home, ".hermes"));
   if (codexInstalled || piInstalled) {
-    out.push(join8(home, ".agents", "skills"));
+    out.push(join6(home, ".agents", "skills"));
   }
   if (hermesInstalled) {
-    out.push(join8(home, ".hermes", "skills"));
+    out.push(join6(home, ".hermes", "skills"));
   }
   if (piInstalled) {
-    out.push(join8(home, ".pi", "agent", "skills"));
+    out.push(join6(home, ".pi", "agent", "skills"));
   }
   return out;
 }
-function detectAgentSkillsRoots(canonicalRoot, home = homedir6()) {
+function detectAgentSkillsRoots(canonicalRoot, home = homedir5()) {
   return resolveDetected(home).filter((p) => p !== canonicalRoot);
 }
 
@@ -852,15 +766,15 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join9(homedir7(), ".claude", "skills");
+    return join7(homedir6(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join9(cwd, ".claude", "skills");
+  return join7(cwd, ".claude", "skills");
 }
 function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
   const out = [];
   for (const root of agentRoots) {
-    const link = join9(root, dirName);
+    const link = join7(root, dirName);
     let existing;
     try {
       existing = lstatSync2(link);
@@ -882,13 +796,13 @@ function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
         continue;
       }
       try {
-        unlinkSync3(link);
+        unlinkSync2(link);
       } catch {
         continue;
       }
     }
     try {
-      mkdirSync5(dirname3(link), { recursive: true });
+      mkdirSync4(dirname2(link), { recursive: true });
       symlinkSync(canonicalDir, link, "dir");
       out.push(link);
     } catch {
@@ -903,7 +817,7 @@ function backfillSymlinks(installRoot) {
     return;
   const detected = detectAgentSkillsRoots(installRoot);
   for (const entry of entries) {
-    const canonical = join9(entry.installRoot, entry.dirName);
+    const canonical = join7(entry.installRoot, entry.dirName);
     if (!existsSync6(canonical))
       continue;
     const fresh = fanOutSymlinks(canonical, entry.dirName, detected);
@@ -992,7 +906,7 @@ function readLocalVersion(path) {
   if (!existsSync6(path))
     return null;
   try {
-    const text = readFileSync7(path, "utf-8");
+    const text = readFileSync5(path, "utf-8");
     const parsed = parseFrontmatter(text);
     if (!parsed)
       return null;
@@ -1078,8 +992,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join9(root, dirName);
-    const skillFile = join9(skillDir, "SKILL.md");
+    const skillDir = join7(root, dirName);
+    const skillFile = join7(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -1090,14 +1004,14 @@ async function runPull(opts) {
     });
     let manifestError;
     if (action === "wrote") {
-      mkdirSync5(skillDir, { recursive: true });
+      mkdirSync4(skillDir, { recursive: true });
       if (existsSync6(skillFile)) {
         try {
           renameSync2(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
-      writeFileSync5(skillFile, renderSkillFile(row));
+      writeFileSync4(skillFile, renderSkillFile(row));
       const symlinks = opts.install === "global" ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root)) : [];
       try {
         recordPull({
@@ -1191,91 +1105,10 @@ async function autoPullSkills(deps = {}) {
   }
 }
 
-// dist/src/hooks/codex/session-start.js
-var log4 = (msg) => log("codex-session-start", msg);
-var __bundleDir = dirname4(fileURLToPath(import.meta.url));
-var context = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents.
-
-Deeplake memory has THREE tiers \u2014 pick the right one for the question:
-1. ~/.deeplake/memory/index.md   \u2014 auto-generated index, top 50 most-recently-updated entries with Created + Last Updated + Project + Description columns. ~5 KB. **For "what's recent / who did X this week / since <date>" queries, START HERE** and trust the Last Updated column over any "Started:" line in summary bodies.
-2. ~/.deeplake/memory/summaries/ \u2014 condensed wiki summaries per session (~3 KB each). For keyword/topic recall, search these.
-3. ~/.deeplake/memory/sessions/  \u2014 raw full-dialogue JSONL (~5 KB each). FALLBACK only \u2014 use when summaries don't contain the exact quote/turn you need.
-
-Search workflow:
-- Time-based ("last week", "today", "since X"): cat ~/.deeplake/memory/index.md and read the most-recent rows.
-- Keyword/topic recall: grep -r "keyword" ~/.deeplake/memory/summaries/ (the shell hook routes this through hybrid lexical+semantic search \u2014 synonyms match too). Then cat the top-matching summary.
-- Raw transcript fallback only: grep -r "keyword" ~/.deeplake/memory/sessions/ (use sparingly \u2014 JSONL is verbose).
-
-\u2705 grep -r "keyword" ~/.deeplake/memory/summaries/
-\u274C grep without a summaries/ or sessions/ suffix \u2014 too noisy
-
-IMPORTANT: Only use bash builtins (cat, ls, grep, echo, jq, head, tail, sed, awk, etc.) on ~/.deeplake/memory/. Do NOT use python, python3, node, curl, or other interpreters \u2014 they are not available in the memory filesystem.
-Do NOT spawn subagents to read deeplake memory.
-
-Organization management \u2014 each argument is SEPARATE (do NOT quote subcommands together):
-- hivemind login                              \u2014 SSO login
-- hivemind whoami                             \u2014 show current user/org
-- hivemind org list                           \u2014 list organizations
-- hivemind org switch <name-or-id>            \u2014 switch organization
-- hivemind workspaces                         \u2014 list workspaces
-- hivemind workspace <id>                     \u2014 switch workspace
-- hivemind invite <email> <ADMIN|WRITE|READ>  \u2014 invite member (ALWAYS ask user which role before inviting)
-- hivemind members                            \u2014 list members
-- hivemind remove <user-id>                   \u2014 remove member
-
-SKILLS (skilify) \u2014 mine + share reusable skills across the org:
-- hivemind skilify                         \u2014 show scope/team/install + per-project state
-- hivemind skilify pull                    \u2014 sync project skills from the org table
-- hivemind skilify pull --user <email>     \u2014 only that author's skills
-- hivemind skilify pull --users a,b,c      \u2014 multiple authors (CSV)
-- hivemind skilify pull --all-users        \u2014 explicit "no author filter"
-- hivemind skilify pull --to project|global  \u2014 install location
-- hivemind skilify pull --dry-run          \u2014 preview only
-- hivemind skilify pull --force            \u2014 overwrite local (creates .bak)
-- hivemind skilify pull <skill-name>       \u2014 pull only that skill (combines with --user)
-- hivemind skilify unpull                  \u2014 remove every skill previously installed by pull
-- hivemind skilify unpull --user <email>   \u2014 remove only that author's pulls
-- hivemind skilify unpull --not-mine       \u2014 remove all pulls except your own
-- hivemind skilify unpull --dry-run        \u2014 preview without touching disk
-- hivemind skilify scope <me|team|org>     \u2014 sharing scope for new skills
-- hivemind skilify install <project|global>  \u2014 default install location
-- hivemind skilify team add|remove|list <name>  \u2014 manage team list`;
-async function main() {
-  if (process.env.HIVEMIND_WIKI_WORKER === "1")
-    return;
-  const input = await readStdin();
-  const creds = loadCredentials();
-  if (!creds?.token) {
-    log4("no credentials found \u2014 run auth login to authenticate");
-  } else {
-    log4(`credentials loaded: org=${creds.orgName ?? creds.orgId}`);
+// dist/src/skilify/autopull-worker.js
+void (async () => {
+  try {
+    await autoPullSkills();
+  } catch {
   }
-  if (creds?.token) {
-    const setupScript = join10(__bundleDir, "session-start-setup.js");
-    const child = spawn("node", [setupScript], {
-      detached: true,
-      stdio: ["pipe", "ignore", "ignore"],
-      env: { ...process.env }
-    });
-    child.stdin?.write(JSON.stringify(input));
-    child.stdin?.end();
-    child.unref();
-    log4("spawned async setup process");
-  }
-  const pullResult = await autoPullSkills();
-  log4(`autopull: pulled=${pullResult.pulled} skipped=${pullResult.skipped}`);
-  let versionNotice = "";
-  const current = getInstalledVersion(__bundleDir, ".codex-plugin");
-  if (current) {
-    versionNotice = `
-Hivemind v${current}`;
-  }
-  const additionalContext = creds?.token ? `${context}
-Logged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}` : `${context}
-Not logged in to Deeplake. Run: hivemind login${versionNotice}`;
-  console.log(additionalContext);
-}
-main().catch((e) => {
-  log4(`fatal: ${e.message}`);
-  process.exit(0);
-});
+})();
