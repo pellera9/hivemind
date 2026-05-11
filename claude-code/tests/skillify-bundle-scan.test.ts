@@ -90,3 +90,45 @@ describe("known anti-patterns are absent from bundled worker", () => {
     }
   });
 });
+
+describe("legacy state-dir migration is shipped in every agent's bundle", () => {
+  // The migration call wires into the four read/write entry points so a
+  // post-rename worker / SessionStart sees the migrated state. If any of
+  // these regressions ship, users with a populated ~/.deeplake/state/skilify/
+  // would silently start fresh on ~/.deeplake/state/skillify/.
+  //
+  // claude-code/codex/cursor/hermes ship the shared TS module compiled into
+  // skillify-worker.js + the SessionStart hooks. pi ships skillify-worker.js
+  // too (no SessionStart hook). openclaw inlines an equivalent helper
+  // because its self-contained bundle can't import from src/skillify.
+  const SHARED_AGENTS = [...AGENTS, "pi"] as const;
+
+  for (const agent of SHARED_AGENTS) {
+    it(`${agent}/bundle/skillify-worker.js: migration helper present and called from readState`, () => {
+      const text = readFileSync(bundlePath(agent, "skillify-worker.js"), "utf-8");
+      expect(text, `${agent}: migrateLegacyStateDir helper missing`).toContain("function migrateLegacyStateDir");
+      // readState is the first state file the worker touches; if migration
+      // isn't called here the worker re-mines already-processed sessions.
+      expect(text, `${agent}: readState missing migrateLegacyStateDir call`).toMatch(
+        /function readState\([^)]*\)\s*\{\s*migrateLegacyStateDir\(\)/,
+      );
+      // Narrow-catch behaviour: only EXDEV/EPERM swallowed; everything else rethrows.
+      expect(text, `${agent}: migration swallows too broadly`).toMatch(
+        /code === "EXDEV" \|\| code === "EPERM"/,
+      );
+    });
+  }
+
+  it("openclaw/dist/index.js: inlined migration present and called before fsMkdir", () => {
+    const text = readFileSync(join(ROOT, "openclaw", "dist", "index.js"), "utf-8");
+    expect(text).toContain("function migrateOpenclawSkillifyLegacyStateDir");
+    // Must be called inside tryAcquireOpenclawSkillifyLock before the fsMkdir.
+    // The order matters: once fsMkdir creates the new dir, the migration
+    // becomes a no-op and any legacy data is orphaned.
+    expect(text).toMatch(
+      /function tryAcquireOpenclawSkillifyLock[\s\S]{0,200}migrateOpenclawSkillifyLegacyStateDir\(\)[\s\S]{0,200}fsMkdir/,
+    );
+    // Same narrow-catch as the shared helper.
+    expect(text).toMatch(/code === "EXDEV" \|\| code === "EPERM"/);
+  });
+});
