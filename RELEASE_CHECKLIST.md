@@ -139,7 +139,7 @@ layers, mirroring the existing `auth-login` family:
   - Use `node "${CLAUDE_PLUGIN_ROOT}/bundle/cli.js" <feature> $ARGUMENTS` (CC) and `node "$CODEX_PLUGIN_ROOT/bundle/cli.js" <feature> $ARGUMENTS` (Codex). **Never** the bare-binary form `hivemind <feature> $ARGUMENTS` — it assumes `npm i -g @deeplake/hivemind` which marketplace-installed users do not have, so the slash silently breaks
   - Cursor and Hermes do not support slash commands at all — those agents go through the CLI or natural-language inject only. Don't write slash commands you cannot deliver across all four agents unless the asymmetry is intentional
   - If the agent already has full coverage via SessionStart inject + `hivemind <feature>` CLI, the slash is pure UX and can be skipped (skillify chose to skip it on PR #98 — agent autonomous discovery + CLI cover the ground)
-- [ ] **Bundle-scan guard test** — a vitest scans the SHIPPED `*/bundle/session-start.js` files and asserts the new section + the most-important flags are present. Protects against silent regressions on rebuild (see `claude-code/tests/skillify-session-start-injection.test.ts`)
+- [ ] **Bundle-scan guard test** — a vitest scans the SHIPPED `*/bundle/session-start.js` files and asserts the new section + the most-important flags are present. Protects against silent regressions on rebuild (see `tests/claude-code/skillify-session-start-injection.test.ts`)
 - [ ] Optional: dedicated SKILL.md if the feature warrants a skill (Claude Code skills auto-load on description match)
 
 If the feature is invocable but undiscoverable, no agent will surface it
@@ -195,10 +195,10 @@ For every shipped artifact under `*/bundle/`:
 - [ ] If you remove a worker or hook, also remove its bundle scan — orphaned bundles silently pass
 
 Examples in tree:
-- `claude-code/tests/wiki-worker-upload-sql.test.ts` — rejects standalone `UPDATE … SET description = …`
-- `claude-code/tests/skillify-bundle-scan.test.ts` — per-agent skillify-worker presence
-- `claude-code/tests/skillify-session-start-injection.test.ts` — per-agent SKILLS injection
-- `claude-code/tests/periodic-summary-bundles.test.ts` — lock-acquire wiring + flag rename
+- `tests/claude-code/wiki-worker-upload-sql.test.ts` — rejects standalone `UPDATE … SET description = …`
+- `tests/claude-code/skillify-bundle-scan.test.ts` — per-agent skillify-worker presence
+- `tests/claude-code/skillify-session-start-injection.test.ts` — per-agent SKILLS injection
+- `tests/claude-code/periodic-summary-bundles.test.ts` — lock-acquire wiring + flag rename
 
 ---
 
