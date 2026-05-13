@@ -1303,6 +1303,32 @@ async function autoPullSkills(deps = {}) {
   }
 }
 
+// dist/src/cli/skillify-spec.js
+var SKILLIFY_COMMANDS = [
+  { cmd: "hivemind skillify", desc: "show scope, team, install, per-project state" },
+  { cmd: "hivemind skillify pull", desc: "sync project skills from the org table to local FS" },
+  { cmd: "hivemind skillify pull --user <email>", desc: "only skills authored by that user" },
+  { cmd: "hivemind skillify pull --users <a,b,c>", desc: "only skills from those authors" },
+  { cmd: "hivemind skillify pull --all-users", desc: 'explicit "no author filter" (default)' },
+  { cmd: "hivemind skillify pull --to <project|global>", desc: "install location (project=cwd/.claude/skills, global=~/.claude/skills)" },
+  { cmd: "hivemind skillify pull --dry-run", desc: "preview without touching disk" },
+  { cmd: "hivemind skillify pull --force", desc: "overwrite local files even if up-to-date (creates .bak)" },
+  { cmd: "hivemind skillify pull <skill-name>", desc: "pull only that one skill (combines with --user)" },
+  { cmd: "hivemind skillify unpull", desc: "remove every skill previously installed by pull" },
+  { cmd: "hivemind skillify unpull --user <email>", desc: "remove only that author's pulls" },
+  { cmd: "hivemind skillify unpull --not-mine", desc: "remove all pulls except your own" },
+  { cmd: "hivemind skillify unpull --dry-run", desc: "preview without touching disk" },
+  { cmd: "hivemind skillify scope <me|team|org>", desc: "sharing scope for newly mined skills" },
+  { cmd: "hivemind skillify install <project|global>", desc: "default install location for new skills" },
+  { cmd: "hivemind skillify promote <skill-name>", desc: "move a project skill to the global location" },
+  { cmd: "hivemind skillify team add|remove|list <name>", desc: "manage team member list" },
+  { cmd: "hivemind skillify mine-local", desc: "one-shot: mine skills from local sessions (no auth needed)" }
+];
+function renderSkillifyCommands() {
+  const maxLen = Math.max(...SKILLIFY_COMMANDS.map((c) => c.cmd.length));
+  return SKILLIFY_COMMANDS.map((c) => `- ${c.cmd.padEnd(maxLen + 2)} \u2014 ${c.desc}`).join("\n");
+}
+
 // dist/src/hooks/session-start.js
 var log5 = (msg) => log("session-start", msg);
 var __bundleDir = dirname4(fileURLToPath(import.meta.url));
@@ -1338,23 +1364,7 @@ Organization management \u2014 each argument is SEPARATE (do NOT quote subcomman
 - hivemind remove <user-id>                   \u2014 remove member
 
 Skill management (mine + share reusable Claude skills across the org):
-- hivemind skillify                                  \u2014 show scope, team, install, per-project state
-- hivemind skillify pull                             \u2014 sync project skills from the org table to local FS
-- hivemind skillify pull --user <email>              \u2014 only skills authored by that user
-- hivemind skillify pull --users <a,b,c>             \u2014 only skills from those authors
-- hivemind skillify pull --all-users                 \u2014 explicit "no author filter" (default)
-- hivemind skillify pull --to <project|global>       \u2014 install location (project=cwd/.claude/skills, global=~/.claude/skills)
-- hivemind skillify pull --dry-run                   \u2014 preview without touching disk
-- hivemind skillify pull --force                     \u2014 overwrite local files even if up-to-date (creates .bak)
-- hivemind skillify pull <skill-name>                \u2014 pull only that one skill (combines with --user)
-- hivemind skillify unpull                           \u2014 remove every skill previously installed by pull
-- hivemind skillify unpull --user <email>            \u2014 remove only that author's pulls
-- hivemind skillify unpull --not-mine                \u2014 remove all pulls except your own
-- hivemind skillify unpull --dry-run                 \u2014 preview without touching disk
-- hivemind skillify scope <me|team|org>              \u2014 sharing scope for newly mined skills
-- hivemind skillify install <project|global>         \u2014 default install location for new skills
-- hivemind skillify promote <skill-name>             \u2014 move a project skill to the global location
-- hivemind skillify team add|remove|list <name>      \u2014 manage team member list
+${renderSkillifyCommands()}
 
 IMPORTANT: Only use bash commands (cat, ls, grep, echo, jq, head, tail, etc.) to interact with ~/.deeplake/memory/. Do NOT use python, python3, node, curl, or other interpreters \u2014 they are not available in the memory filesystem. Avoid bash brace expansions like \`{1..10}\` (not fully supported); spell out paths explicitly. Bash output is capped at 10MB total \u2014 avoid \`for f in *.json; do cat $f\` style loops on the whole sessions dir.
 

@@ -24,6 +24,7 @@ import { loadCredentials } from "../../commands/auth.js";
 import { loadConfig } from "../../config.js";
 import { DeeplakeApi } from "../../deeplake-api.js";
 import { sqlStr } from "../../utils/sql.js";
+import { renderSkillifyCommands } from "../../cli/skillify-spec.js";
 import { readStdin } from "../../utils/stdin.js";
 import { log as _log } from "../../utils/debug.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
@@ -54,22 +55,7 @@ Organization management — each argument is SEPARATE (do NOT quote subcommands 
 - hivemind remove <user-id>                   — remove member
 
 SKILLS (skillify) — mine + share reusable skills across the org:
-- hivemind skillify                         — show scope/team/install + per-project state
-- hivemind skillify pull                    — sync project skills from the org table
-- hivemind skillify pull --user <email>     — only that author's skills
-- hivemind skillify pull --users a,b,c      — multiple authors (CSV)
-- hivemind skillify pull --all-users        — explicit "no author filter"
-- hivemind skillify pull --to project|global  — install location
-- hivemind skillify pull --dry-run          — preview only
-- hivemind skillify pull --force            — overwrite local (creates .bak)
-- hivemind skillify pull <skill-name>       — pull only that skill (combines with --user)
-- hivemind skillify unpull                  — remove every skill previously installed by pull
-- hivemind skillify unpull --user <email>   — remove only that author's pulls
-- hivemind skillify unpull --not-mine       — remove all pulls except your own
-- hivemind skillify unpull --dry-run        — preview without touching disk
-- hivemind skillify scope <me|team|org>     — sharing scope for new skills
-- hivemind skillify install <project|global>  — default install location
-- hivemind skillify team add|remove|list <name>  — manage team list`;
+${renderSkillifyCommands()}`;
 
 interface CursorSessionStartInput {
   session_id?: string;

@@ -558,6 +558,32 @@ var DeeplakeApi = class {
   }
 };
 
+// dist/src/cli/skillify-spec.js
+var SKILLIFY_COMMANDS = [
+  { cmd: "hivemind skillify", desc: "show scope, team, install, per-project state" },
+  { cmd: "hivemind skillify pull", desc: "sync project skills from the org table to local FS" },
+  { cmd: "hivemind skillify pull --user <email>", desc: "only skills authored by that user" },
+  { cmd: "hivemind skillify pull --users <a,b,c>", desc: "only skills from those authors" },
+  { cmd: "hivemind skillify pull --all-users", desc: 'explicit "no author filter" (default)' },
+  { cmd: "hivemind skillify pull --to <project|global>", desc: "install location (project=cwd/.claude/skills, global=~/.claude/skills)" },
+  { cmd: "hivemind skillify pull --dry-run", desc: "preview without touching disk" },
+  { cmd: "hivemind skillify pull --force", desc: "overwrite local files even if up-to-date (creates .bak)" },
+  { cmd: "hivemind skillify pull <skill-name>", desc: "pull only that one skill (combines with --user)" },
+  { cmd: "hivemind skillify unpull", desc: "remove every skill previously installed by pull" },
+  { cmd: "hivemind skillify unpull --user <email>", desc: "remove only that author's pulls" },
+  { cmd: "hivemind skillify unpull --not-mine", desc: "remove all pulls except your own" },
+  { cmd: "hivemind skillify unpull --dry-run", desc: "preview without touching disk" },
+  { cmd: "hivemind skillify scope <me|team|org>", desc: "sharing scope for newly mined skills" },
+  { cmd: "hivemind skillify install <project|global>", desc: "default install location for new skills" },
+  { cmd: "hivemind skillify promote <skill-name>", desc: "move a project skill to the global location" },
+  { cmd: "hivemind skillify team add|remove|list <name>", desc: "manage team member list" },
+  { cmd: "hivemind skillify mine-local", desc: "one-shot: mine skills from local sessions (no auth needed)" }
+];
+function renderSkillifyCommands() {
+  const maxLen = Math.max(...SKILLIFY_COMMANDS.map((c) => c.cmd.length));
+  return SKILLIFY_COMMANDS.map((c) => `- ${c.cmd.padEnd(maxLen + 2)} \u2014 ${c.desc}`).join("\n");
+}
+
 // dist/src/utils/stdin.js
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -1299,22 +1325,7 @@ Organization management \u2014 each argument is SEPARATE (do NOT quote subcomman
 - hivemind remove <user-id>                   \u2014 remove member
 
 SKILLS (skillify) \u2014 mine + share reusable skills across the org:
-- hivemind skillify                         \u2014 show scope/team/install + per-project state
-- hivemind skillify pull                    \u2014 sync project skills from the org table
-- hivemind skillify pull --user <email>     \u2014 only that author's skills
-- hivemind skillify pull --users a,b,c      \u2014 multiple authors (CSV)
-- hivemind skillify pull --all-users        \u2014 explicit "no author filter"
-- hivemind skillify pull --to project|global  \u2014 install location
-- hivemind skillify pull --dry-run          \u2014 preview only
-- hivemind skillify pull --force            \u2014 overwrite local (creates .bak)
-- hivemind skillify pull <skill-name>       \u2014 pull only that skill (combines with --user)
-- hivemind skillify unpull                  \u2014 remove every skill previously installed by pull
-- hivemind skillify unpull --user <email>   \u2014 remove only that author's pulls
-- hivemind skillify unpull --not-mine       \u2014 remove all pulls except your own
-- hivemind skillify unpull --dry-run        \u2014 preview without touching disk
-- hivemind skillify scope <me|team|org>     \u2014 sharing scope for new skills
-- hivemind skillify install <project|global>  \u2014 default install location
-- hivemind skillify team add|remove|list <name>  \u2014 manage team list`;
+${renderSkillifyCommands()}`;
 async function createPlaceholder(api, table, sessionId, cwd, userName, orgName, workspaceId) {
   const summaryPath = `/summaries/${userName}/${sessionId}.md`;
   const existing = await api.query(`SELECT path FROM "${table}" WHERE path = '${sqlStr(summaryPath)}' LIMIT 1`);

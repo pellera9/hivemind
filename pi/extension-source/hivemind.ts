@@ -676,6 +676,41 @@ function textResult(text: string) {
 
 // ---------- main extension -----------------------------------------------------
 
+// MIRROR of src/cli/skillify-spec.ts SKILLIFY_COMMANDS.
+//
+// pi extensions are shipped as a single self-contained .ts file loaded by
+// pi's runtime, so they cannot import from src/. This array is hand-kept
+// in sync with the canonical spec; the agents-deployment-session-start-injection
+// skill documents the rule and there is a vitest drift-scan that fails the
+// build if the two lists diverge.
+const PI_SKILLIFY_COMMANDS: { cmd: string; desc: string }[] = [
+  { cmd: "hivemind skillify",                             desc: "show scope, team, install, per-project state" },
+  { cmd: "hivemind skillify pull",                        desc: "sync project skills from the org table to local FS" },
+  { cmd: "hivemind skillify pull --user <email>",         desc: "only skills authored by that user" },
+  { cmd: "hivemind skillify pull --users <a,b,c>",        desc: "only skills from those authors" },
+  { cmd: "hivemind skillify pull --all-users",            desc: 'explicit "no author filter" (default)' },
+  { cmd: "hivemind skillify pull --to <project|global>",  desc: "install location (project=cwd/.claude/skills, global=~/.claude/skills)" },
+  { cmd: "hivemind skillify pull --dry-run",              desc: "preview without touching disk" },
+  { cmd: "hivemind skillify pull --force",                desc: "overwrite local files even if up-to-date (creates .bak)" },
+  { cmd: "hivemind skillify pull <skill-name>",           desc: "pull only that one skill (combines with --user)" },
+  { cmd: "hivemind skillify unpull",                      desc: "remove every skill previously installed by pull" },
+  { cmd: "hivemind skillify unpull --user <email>",       desc: "remove only that author's pulls" },
+  { cmd: "hivemind skillify unpull --not-mine",           desc: "remove all pulls except your own" },
+  { cmd: "hivemind skillify unpull --dry-run",            desc: "preview without touching disk" },
+  { cmd: "hivemind skillify scope <me|team|org>",         desc: "sharing scope for newly mined skills" },
+  { cmd: "hivemind skillify install <project|global>",    desc: "default install location for new skills" },
+  { cmd: "hivemind skillify promote <skill-name>",        desc: "move a project skill to the global location" },
+  { cmd: "hivemind skillify team add|remove|list <name>", desc: "manage team member list" },
+  { cmd: "hivemind skillify mine-local",                  desc: "one-shot: mine skills from local sessions (no auth needed)" },
+];
+
+function piRenderSkillifyCommands(): string {
+  const maxLen = Math.max(...PI_SKILLIFY_COMMANDS.map(c => c.cmd.length));
+  return PI_SKILLIFY_COMMANDS
+    .map(c => `- ${c.cmd.padEnd(maxLen + 2)} — ${c.desc}`)
+    .join("\n");
+}
+
 const CONTEXT_PREAMBLE = `DEEPLAKE MEMORY: Persistent memory at ~/.deeplake/memory/ shared across sessions, users, and agents in your org.
 
 Three hivemind tools are registered:
@@ -697,22 +732,7 @@ Organization management — each argument is SEPARATE (do NOT quote subcommands 
 - hivemind remove <user-id>                   — remove member
 
 SKILLS (skillify) — mine + share reusable skills across the org. Run these in a terminal (or via shell if available):
-- hivemind skillify                         — show scope/team/install + per-project state
-- hivemind skillify pull                    — sync project skills from the org table
-- hivemind skillify pull --user <email>     — only that author's skills
-- hivemind skillify pull --users a,b,c      — multiple authors (CSV)
-- hivemind skillify pull --all-users        — explicit "no author filter"
-- hivemind skillify pull --to project|global  — install location
-- hivemind skillify pull --dry-run          — preview only
-- hivemind skillify pull --force            — overwrite local (creates .bak)
-- hivemind skillify pull <skill-name>       — pull only that skill (combines with --user)
-- hivemind skillify unpull                  — remove every skill previously installed by pull
-- hivemind skillify unpull --user <email>   — remove only that author's pulls
-- hivemind skillify unpull --not-mine       — remove all pulls except your own
-- hivemind skillify unpull --dry-run        — preview without touching disk
-- hivemind skillify scope <me|team|org>     — sharing scope for new skills
-- hivemind skillify install <project|global>  — default install location
-- hivemind skillify team add|remove|list <name>  — manage team list`;
+${piRenderSkillifyCommands()}`;
 
 export default function hivemindExtension(pi: ExtensionAPI): void {
   const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
