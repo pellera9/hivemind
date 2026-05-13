@@ -244,14 +244,14 @@ function buildSessionPrompt(pairs: Pair[], session: SessionFile, verdictPath: st
   ].join("\n");
 }
 
-interface MinedSkill {
+export interface MinedSkill {
   name: string;
   description: string;
   trigger?: string;
   body: string;
 }
 
-interface MultiVerdict {
+export interface MultiVerdict {
   reason?: string;
   skills: MinedSkill[];
 }
@@ -263,7 +263,7 @@ interface MultiVerdict {
  * Returns null on any failure; a successful return guarantees skills is an
  * array (possibly empty = SKIP).
  */
-function parseMultiVerdict(raw: string): MultiVerdict | null {
+export function parseMultiVerdict(raw: string): MultiVerdict | null {
   const block = extractJsonBlock(raw);
   if (!block) return null;
   let parsed: any;
@@ -331,7 +331,7 @@ const SUMMARY_STOPWORDS = new Set([
   "code", "file", "files", "way", "ways", "via",
 ]);
 
-function summaryTokens(s: string): Set<string> {
+export function summaryTokens(s: string): Set<string> {
   return new Set(
     s
       .toLowerCase()
@@ -340,7 +340,7 @@ function summaryTokens(s: string): Set<string> {
   );
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let intersection = 0;
   for (const t of a) if (b.has(t)) intersection++;
@@ -354,7 +354,7 @@ function jaccard(a: Set<string>, b: Set<string>): number {
  */
 const OVERLAP_THRESHOLD = 0.4;
 
-function findOverlap(
+export function findOverlap(
   candidateDesc: string,
   others: ReadonlyArray<{ name: string; desc: string }>,
 ): { name: string; score: number } | null {
