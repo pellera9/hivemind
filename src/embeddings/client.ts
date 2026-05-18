@@ -95,6 +95,33 @@ export class EmbedClient {
    * keep poisoning every session until its 10-minute idle-out fires.
    */
   async embed(text: string, kind: EmbedKind = "document"): Promise<number[] | null> {
+    const v = await this.embedAttempt(text, kind);
+    if (v !== "recycled") return v;
+    // The probe killed the old daemon mid-call. With autoSpawn enabled,
+    // spawn a fresh one and retry once. Without autoSpawn (tests, pi's
+    // fallback that relies on the canonical shared daemon already being
+    // up) we have no way to bring the daemon back, so just return null —
+    // the caller treats it the same as any other transient miss.
+    //
+    // The retry path skips verifyDaemonOnce internally because
+    // `helloVerified` is still false (we never reached the compatible
+    // branch) but `_recycledStuckDaemon` is now true, so the second probe
+    // early-returns instead of triggering another kill.
+    if (!this.autoSpawn) return null;
+    this.trySpawnDaemon();
+    await this.waitForDaemonReady();
+    const retry = await this.embedAttempt(text, kind);
+    return retry === "recycled" ? null : retry;
+  }
+
+  /**
+   * One round-trip: connect → verify → embed. Returns:
+   *  - number[]  : embedding vector (happy path)
+   *  - null      : timeout / daemon error / transformers-missing
+   *  - "recycled": verifyDaemonOnce killed the daemon mid-call;
+   *                caller should respawn and retry once.
+   */
+  private async embedAttempt(text: string, kind: EmbedKind): Promise<number[] | null | "recycled"> {
     let sock: Socket;
     try {
       sock = await this.connectOnce();
@@ -103,7 +130,13 @@ export class EmbedClient {
       return null;
     }
     try {
-      await this.verifyDaemonOnce(sock);
+      const recycled = await this.verifyDaemonOnce(sock);
+      if (recycled) {
+        // The verify step killed the daemon + cleared the sock. Don't
+        // send the embed on this now-dead connection — signal "recycled"
+        // to the caller so it can spawn fresh and retry.
+        return "recycled";
+      }
       const id = String(++this.nextId);
       const req: EmbedRequest = { op: "embed", id, kind, text };
       const resp = await this.sendAndWait(sock, req);
@@ -126,6 +159,19 @@ export class EmbedClient {
   }
 
   /**
+   * Poll for the sock file to come back after `trySpawnDaemon` — used by
+   * the recycle retry path. Best-effort: caps at `spawnWaitMs` and
+   * returns regardless so the retry attempt can run.
+   */
+  private async waitForDaemonReady(): Promise<void> {
+    const deadline = Date.now() + this.spawnWaitMs;
+    while (Date.now() < deadline) {
+      if (existsSync(this.socketPath)) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  /**
    * Send a `hello` on first successful connect per EmbedClient instance.
    * If the daemon answers with a path that doesn't match our configured
    * daemonEntry — typical after a marketplace upgrade replaced the bundle
@@ -137,14 +183,14 @@ export class EmbedClient {
    * the flag false; the next reconnect re-runs verification against
    * whatever daemon is then live (typically the fresh spawn).
    */
-  private async verifyDaemonOnce(sock: Socket): Promise<void> {
-    if (this.helloVerified) return;
+  private async verifyDaemonOnce(sock: Socket): Promise<boolean> {
+    if (this.helloVerified) return false;
     if (!this.daemonEntry) {
       // No expectation to verify against (e.g. canonical-shared-deps mode,
       // or pi's fallback). Mark verified so we don't re-enter on every
       // connect for the same EmbedClient.
       this.helloVerified = true;
-      return;
+      return false;
     }
     const id = String(++this.nextId);
     const req: HelloRequest = { op: "hello", id };
@@ -158,7 +204,7 @@ export class EmbedClient {
       // reconnect attempts verification again (the current probe was
       // inconclusive, not "definitely compatible").
       log(`hello probe failed (inconclusive, will retry next connect): ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      return false;
     }
     const hello = resp as HelloResponse;
     // Recycle triggers — in order of severity:
@@ -182,24 +228,25 @@ export class EmbedClient {
       // skip the check (but don't mark verified — the next reconnect
       // against the freshly spawned daemon will run hello again, which
       // is a single round-trip and harmless).
-      return;
+      return false;
     }
     if (!hello.daemonPath) {
       _recycledStuckDaemon = true;
       log(`daemon does not implement hello (older protocol); recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
     if (hello.daemonPath !== this.daemonEntry && !existsSync(hello.daemonPath)) {
       _recycledStuckDaemon = true;
       log(`daemon path no longer on disk — running=${hello.daemonPath} (gone) expected=${this.daemonEntry}; recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
     // Compatible — same path, or different path but functionally identical
     // (multi-agent sharing of one warm daemon). Only NOW do we mark the
     // EmbedClient as verified.
     this.helloVerified = true;
+    return false;
   }
 
   /**

@@ -821,6 +821,24 @@ var EmbedClient = class {
    * keep poisoning every session until its 10-minute idle-out fires.
    */
   async embed(text, kind = "document") {
+    const v = await this.embedAttempt(text, kind);
+    if (v !== "recycled")
+      return v;
+    if (!this.autoSpawn)
+      return null;
+    this.trySpawnDaemon();
+    await this.waitForDaemonReady();
+    const retry = await this.embedAttempt(text, kind);
+    return retry === "recycled" ? null : retry;
+  }
+  /**
+   * One round-trip: connect → verify → embed. Returns:
+   *  - number[]  : embedding vector (happy path)
+   *  - null      : timeout / daemon error / transformers-missing
+   *  - "recycled": verifyDaemonOnce killed the daemon mid-call;
+   *                caller should respawn and retry once.
+   */
+  async embedAttempt(text, kind) {
     let sock;
     try {
       sock = await this.connectOnce();
@@ -830,7 +848,10 @@ var EmbedClient = class {
       return null;
     }
     try {
-      await this.verifyDaemonOnce(sock);
+      const recycled = await this.verifyDaemonOnce(sock);
+      if (recycled) {
+        return "recycled";
+      }
       const id = String(++this.nextId);
       const req = { op: "embed", id, kind, text };
       const resp = await this.sendAndWait(sock, req);
@@ -855,6 +876,19 @@ var EmbedClient = class {
     }
   }
   /**
+   * Poll for the sock file to come back after `trySpawnDaemon` — used by
+   * the recycle retry path. Best-effort: caps at `spawnWaitMs` and
+   * returns regardless so the retry attempt can run.
+   */
+  async waitForDaemonReady() {
+    const deadline = Date.now() + this.spawnWaitMs;
+    while (Date.now() < deadline) {
+      if (existsSync4(this.socketPath))
+        return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  /**
    * Send a `hello` on first successful connect per EmbedClient instance.
    * If the daemon answers with a path that doesn't match our configured
    * daemonEntry — typical after a marketplace upgrade replaced the bundle
@@ -868,10 +902,10 @@ var EmbedClient = class {
    */
   async verifyDaemonOnce(sock) {
     if (this.helloVerified)
-      return;
+      return false;
     if (!this.daemonEntry) {
       this.helloVerified = true;
-      return;
+      return false;
     }
     const id = String(++this.nextId);
     const req = { op: "hello", id };
@@ -880,25 +914,26 @@ var EmbedClient = class {
       resp = await this.sendAndWait(sock, req);
     } catch (e) {
       log4(`hello probe failed (inconclusive, will retry next connect): ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      return false;
     }
     const hello = resp;
     if (_recycledStuckDaemon) {
-      return;
+      return false;
     }
     if (!hello.daemonPath) {
       _recycledStuckDaemon = true;
       log4(`daemon does not implement hello (older protocol); recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
     if (hello.daemonPath !== this.daemonEntry && !existsSync4(hello.daemonPath)) {
       _recycledStuckDaemon = true;
       log4(`daemon path no longer on disk \u2014 running=${hello.daemonPath} (gone) expected=${this.daemonEntry}; recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
     this.helloVerified = true;
+    return false;
   }
   /**
    * On a transformers-missing error from the daemon, SIGTERM the stuck

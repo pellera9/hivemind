@@ -68,7 +68,12 @@ describe("EmbedClient", () => {
       if (req.op === "embed") return { id: req.id, embedding: [0.1, 0.2, 0.3] };
       return { id: req.id, ready: true };
     });
-    const client = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false });
+    // daemonEntry: "" → falsy, so verifyDaemonOnce early-returns without
+    // probing. Tests that care about embed semantics (not handshake) opt
+    // out of verification this way; without it the dev-machine fallback
+    // to SHARED_DAEMON_PATH would resolve a real path and the handshake
+    // mismatch (hello returns no daemonPath) would trip the recycle path.
+    const client = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false, daemonEntry: "" });
     const vec = await client.embed("hello", "document");
     expect(vec).toEqual([0.1, 0.2, 0.3]);
   });
@@ -403,7 +408,7 @@ describe("EmbedClient — transformers-missing handling", () => {
       if (req.op === "hello") return { id: req.id, daemonPath: "/somewhere", pid: 1, protocolVersion: 1 };
       return { id: req.id, error: "@huggingface/transformers is not installed anywhere reachable. Run `hivemind embeddings install`" };
     });
-    const client = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false });
+    const client = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false, daemonEntry: "" });
     const vec = await client.embed("hello");
     expect(vec).toBeNull();
     expect(enqueueNotificationMock).toHaveBeenCalledTimes(1);
@@ -433,8 +438,8 @@ describe("EmbedClient — transformers-missing handling", () => {
       if (req.op === "hello") return { id: req.id, daemonPath: "/somewhere", pid: 1, protocolVersion: 1 };
       return { id: req.id, error: "Cannot find package '@huggingface/transformers'" };
     });
-    const c1 = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false });
-    const c2 = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false });
+    const c1 = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false, daemonEntry: "" });
+    const c2 = new EmbedClient({ socketDir: dir, timeoutMs: 500, autoSpawn: false, daemonEntry: "" });
     await c1.embed("a");
     await c2.embed("b");
     expect(enqueueNotificationMock).toHaveBeenCalledTimes(1);
@@ -605,6 +610,38 @@ describe("EmbedClient — hello handshake / stuck daemon recycle", () => {
     await client.embed("c");
     expect(helloCount).toBe(1);
     expect(embedCount).toBe(3);
+  });
+
+  it("recycled probe + autoSpawn=false returns null cleanly (no hang on dead socket)", async () => {
+    // Regression for CodeRabbit #9: previously `embed()` proceeded with
+    // its embed request on the SAME socket after `verifyDaemonOnce()`
+    // had SIGTERMed the daemon — the request silently dropped onto a
+    // dead connection. The fix splits `embed()` into an attempt that
+    // returns the sentinel "recycled" when the verify step killed the
+    // daemon, so the outer call can spawn fresh + retry or (with
+    // autoSpawn off) bail to null instead of stalling.
+    const dir = makeTmpDir();
+    let embedAttempts = 0;
+    await startFakeDaemon(dir, (req) => {
+      if (req.op === "hello") {
+        // No daemonPath → triggers "older protocol" recycle branch.
+        return { id: req.id, ready: true } as any;
+      }
+      embedAttempts += 1;
+      // If the bug returned, the test would see this count tick to 1 on
+      // the now-dead socket — we want it to stay 0.
+      return { id: req.id, embedding: [0.9, 0.9, 0.9] };
+    });
+    const client = new EmbedClient({
+      socketDir: dir,
+      timeoutMs: 500,
+      autoSpawn: false,
+      daemonEntry: "/expected-but-not-this",
+    });
+    const v = await client.embed("recycle-me");
+    expect(v).toBeNull();
+    // The whole point: we did NOT send an embed on the recycled socket.
+    expect(embedAttempts).toBe(0);
   });
 
   it("does NOT mark helloVerified after a probe failure — next reconnect retries verification", async () => {
