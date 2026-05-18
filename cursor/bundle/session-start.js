@@ -1511,7 +1511,14 @@ Organization management \u2014 each argument is SEPARATE (do NOT quote subcomman
 - hivemind remove <user-id>                   \u2014 remove member
 
 SKILLS (skillify) \u2014 mine + share reusable skills across the org:
-${renderSkillifyCommands()}`;
+${renderSkillifyCommands()}
+
+Embeddings (semantic memory search) \u2014 opt-in, persisted in ~/.deeplake/config.json:
+- hivemind embeddings install               \u2014 download deps (~600MB), symlink agents, set enabled:true
+- hivemind embeddings enable                \u2014 flip enabled:true (run install first if deps missing)
+- hivemind embeddings disable               \u2014 flip enabled:false + SIGTERM daemon (deps stay on disk)
+- hivemind embeddings uninstall [--prune]   \u2014 remove agent symlinks + disable; --prune wipes deps too
+- hivemind embeddings status                \u2014 show config + deps + per-agent link state`;
 function resolveSessionId(input) {
   return input.session_id ?? input.conversation_id ?? `cursor-${Date.now()}`;
 }

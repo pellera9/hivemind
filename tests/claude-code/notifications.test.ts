@@ -284,6 +284,80 @@ describe("drainSessionStart with welcome rule registered", () => {
 // queue (push-based notifications)
 // ---------------------------------------------------------------------------
 
+describe("enqueueNotification cross-process safety", () => {
+  // Regression for CodeRabbit #4: previously `enqueueNotification` did
+  // read-modify-write on the queue JSON without any cross-process lock,
+  // so two concurrent producers would race and the later `rename(2)`
+  // would clobber the earlier one's append. Spawn N subprocesses that
+  // each enqueue one notification and assert the final queue length
+  // equals N — without the lock, the count would be < N.
+  const modPath = new URL("../../src/notifications/queue.ts", import.meta.url).pathname;
+
+  it("cross-process producers with identical (id, dedupKey) collapse to one queue entry", async () => {
+    // Regression for CodeRabbit #8/#12: previously the dedup gate
+    // (`_signalledMissingDeps`) lived in-process, so every fresh hook
+    // process would re-enqueue the same `embed-deps-missing` warning
+    // until the next drain. Two subprocesses with identical
+    // (id, dedupKey) must now produce exactly one entry in the queue.
+    const code =
+      `import("${modPath}").then(async m => { ` +
+      `  await m.enqueueNotification({ ` +
+      `    id: "embed-deps-missing", ` +
+      `    title: "T", body: "B", ` +
+      `    dedupKey: { reason: "transformers-missing", detail: "same" } ` +
+      `  }); ` +
+      `  process.stdout.write("ok"); ` +
+      `});`;
+    for (let i = 0; i < 3; i++) {
+      const r = spawnSync("npx", ["tsx", "-e", code], {
+        env: { ...process.env, HOME: TEMP_HOME },
+        encoding: "utf-8",
+        timeout: 30_000,
+      });
+      expect(r.status, `producer ${i} stderr=${(r.stderr || "").slice(0, 300)}`).toBe(0);
+    }
+    const q = readQueue().queue;
+    expect(q.length).toBe(1);
+    expect(q[0].id).toBe("embed-deps-missing");
+  }, 60_000);
+
+  it("N parallel producers each append exactly once (no lost writes)", async () => {
+    const N = 12;
+    // Each subprocess imports the queue module and enqueues a uniquely-
+    // identified notification. They all share the same $HOME (tmp dir
+    // from outer beforeEach) so they target the same queue file.
+    const code =
+      `import("${modPath}").then(async m => { ` +
+      `  const idx = process.env.PRODUCER_IDX; ` +
+      `  await m.enqueueNotification({ id: "test-cross-proc", title: "T" + idx, body: "B" + idx, dedupKey: { idx } }); ` +
+      `  process.stdout.write("ok"); ` +
+      `});`;
+
+    const runs = Array.from({ length: N }, (_, i) =>
+      new Promise<void>((resolve, reject) => {
+        const r = spawnSync("npx", ["tsx", "-e", code], {
+          env: { ...process.env, HOME: TEMP_HOME, PRODUCER_IDX: String(i) },
+          encoding: "utf-8",
+          timeout: 30_000,
+        });
+        if (r.status !== 0) {
+          reject(new Error(`producer ${i} exit=${r.status} stderr=${(r.stderr || "").slice(0, 300)}`));
+        } else {
+          resolve();
+        }
+      }),
+    );
+    await Promise.all(runs);
+
+    const finalQueue = readQueue().queue;
+    expect(finalQueue.length).toBe(N);
+    // Every producer index 0..N-1 must appear exactly once.
+    const idxs = finalQueue.map(n => (n.dedupKey as { idx: string }).idx).sort();
+    const expected = Array.from({ length: N }, (_, i) => String(i)).sort();
+    expect(idxs).toEqual(expected);
+  }, 60_000);
+});
+
 describe("enqueueNotification + drainSessionStart", () => {
   let writes: string[] = [];
 
@@ -300,7 +374,7 @@ describe("enqueueNotification + drainSessionStart", () => {
   });
 
   it("delivers a queued notification on the next drain and clears the queue", async () => {
-    enqueueNotification({
+    await enqueueNotification({
       id: "summarization-due",
       title: "Time for a summary refresh",
       body: "You've captured 50 sessions since the last summary update.",
@@ -324,21 +398,21 @@ describe("enqueueNotification + drainSessionStart", () => {
       body: "B",
       dedupKey: { v: 1 },
     };
-    enqueueNotification(n);
+    await enqueueNotification(n);
     await drainSessionStart({ agent: "claude-code", creds: null });
     writes.length = 0;
 
-    enqueueNotification(n);
+    await enqueueNotification(n);
     await drainSessionStart({ agent: "claude-code", creds: null });
     expect(writes.length).toBe(0);
   });
 
   it("re-delivers a queue item with the same id but different dedupKey", async () => {
-    enqueueNotification({ id: "foo", title: "T", body: "B1", dedupKey: { v: 1 } });
+    await enqueueNotification({ id: "foo", title: "T", body: "B1", dedupKey: { v: 1 } });
     await drainSessionStart({ agent: "claude-code", creds: null });
     writes.length = 0;
 
-    enqueueNotification({ id: "foo", title: "T", body: "B2", dedupKey: { v: 2 } });
+    await enqueueNotification({ id: "foo", title: "T", body: "B2", dedupKey: { v: 2 } });
     await drainSessionStart({ agent: "claude-code", creds: null });
     expect(writes.length).toBe(1);
     expect(JSON.parse(writes[0]).hookSpecificOutput.additionalContext).toContain("B2");
