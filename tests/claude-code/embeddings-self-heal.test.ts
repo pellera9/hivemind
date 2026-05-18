@@ -81,7 +81,12 @@ describe("ensurePluginNodeModulesLink", () => {
     expect(readlinkSync(link)).toBe(elsewhere);
   });
 
-  it("removes a DANGLING symlink (target deleted out from under it) so the next call can recreate", () => {
+  it("repairs a DANGLING symlink in the SAME call (no two-pass recovery)", () => {
+    // Regression for CodeRabbit #3/#13: previously this branch removed
+    // the stale link and returned, leaving the current hook run without
+    // a working `node_modules` link until a second invocation. Now the
+    // helper removes the dangling link AND immediately re-creates it
+    // pointing at the correct shared target, so a single call is enough.
     mkdirSync(sharedNodeModules, { recursive: true });
     const danglingTarget = join(root, "gone");
     mkdirSync(danglingTarget);
@@ -90,12 +95,11 @@ describe("ensurePluginNodeModulesLink", () => {
     rmSync(danglingTarget, { recursive: true, force: true });
 
     const r = ensurePluginNodeModulesLink({ bundleDir, sharedNodeModules });
+    // Diagnostic preserved: the result kind still reports we removed a
+    // stale link (with the original dangling target) so callers can log
+    // the recovery. But the link is now alive and points at shared.
     expect(r.kind).toBe("stale-link-removed");
-    expect(existsSync(link)).toBe(false);
-
-    // The next call should now create the correct link.
-    const r2 = ensurePluginNodeModulesLink({ bundleDir, sharedNodeModules });
-    expect(r2.kind).toBe("linked");
+    expect(existsSync(link)).toBe(true);
     expect(readlinkSync(link)).toBe(sharedNodeModules);
   });
 

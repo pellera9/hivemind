@@ -84,14 +84,27 @@ export function ensurePluginNodeModulesLink(opts: SelfHealOptions): SelfHealResu
     }
     // Symlink to somewhere else — check whether the existing target
     // resolves to a real directory. If it doesn't, the link is dangling
-    // and safe to remove so the next call can recreate.
+    // and safe to remove + immediately re-create. Recreating in the same
+    // call (rather than returning "stale-link-removed" and waiting for
+    // the next session-start) means the CURRENT hook run lands with a
+    // healed link, not the one after it.
     try {
       statSync(link); // follows symlink — throws on dangling
       // Real directory at a different target → don't override the user's choice.
       return { kind: "linked-elsewhere", link, existingTarget };
     } catch {
       try { rmSync(link); } catch { /* best-effort */ }
-      return { kind: "stale-link-removed", link, danglingTarget: existingTarget };
+      // Fall through to atomic re-create. If that fails we return its
+      // error rather than the stale-link-removed marker, since the link
+      // is now genuinely absent.
+      const recreated = createSymlinkAtomic(target, link);
+      // Keep the diagnostic that a stale link was repaired so callers
+      // can log the recovery — overload the existing variant with the
+      // dangling target the link used to point at.
+      if (recreated.kind === "linked") {
+        return { kind: "stale-link-removed", link, danglingTarget: existingTarget };
+      }
+      return recreated;
     }
   }
 

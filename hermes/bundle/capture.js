@@ -1218,7 +1218,11 @@ function ensurePluginNodeModulesLink(opts) {
         rmSync(link);
       } catch {
       }
-      return { kind: "stale-link-removed", link, danglingTarget: existingTarget };
+      const recreated = createSymlinkAtomic(target, link);
+      if (recreated.kind === "linked") {
+        return { kind: "stale-link-removed", link, danglingTarget: existingTarget };
+      }
+      return recreated;
     }
   }
   return { kind: "plugin-owns-node-modules", link };
