@@ -283,6 +283,12 @@ describe("OpenClaw skillify worker (mining) wiring", () => {
     expect(src).toMatch(/OPENCLAW_SKILLIFY_WORKER_PATH\s*=\s*joinPath\(__openclaw_dirname,\s*"skillify-worker\.js"\)/);
     // HIVEMIND_SKILLIFY_WORKER=1 recursion guard set on spawn env
     expect(src).toMatch(/HIVEMIND_SKILLIFY_WORKER:\s*"1"/);
+    // Per-runtime dedup guard (#100) — explicit assertions so a future
+    // refactor that drops the Set or its has/add usage fails this test
+    // (CodeRabbit on #172).
+    expect(src).toMatch(/const skillifySpawnedFor = new Set<string>\(\)/);
+    expect(src).toMatch(/if \(!skillifySpawnedFor\.has\(sid\)\)/);
+    expect(src).toMatch(/skillifySpawnedFor\.add\(sid\)/);
     // agent_end hook calls it after the capture loop. Distance bumped
     // from 500→1500 to accommodate the per-runtime spawn-dedup comment
     // block landed for #100 between `Auto-captured` and the spawn site.

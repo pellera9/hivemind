@@ -68,6 +68,7 @@ import {
   existsSync as fsExists, mkdirSync as fsMkdir, openSync as fsOpen,
   closeSync as fsClose, writeFileSync as fsWriteFile, constants as fsConstants,
   readFileSync as fsReadFile, renameSync as fsRename, unlinkSync as fsUnlink,
+  statSync as fsStat,
 } from "node:fs";
 import { createHash } from "node:crypto";
 // node:child_process is stubbed in the main openclaw bundle (see esbuild.config.mjs
@@ -466,11 +467,21 @@ function tryAcquireOpenclawSkillifyLock(projectKey: string): boolean {
       return acquire();
     } catch {
       // O_EXCL failed → lock file already exists. Check staleness.
+      // There's a brief window between O_CREAT|O_EXCL and the timestamp
+      // write where a racing caller can see an empty body. Don't treat
+      // empty/NaN as immediately stale (CodeRabbit on #172) — fall back
+      // to the file's mtime to decide. If the FILE is fresh, the
+      // competitor is mid-write and we should yield; if the file is
+      // older than LOCK_MAX_AGE_MS, the previous holder crashed without
+      // writing the timestamp (or the disk lost it), and we can recycle.
       try {
         const body = fsReadFile(lockPath, "utf-8");
         const ts = Number.parseInt(body.trim(), 10);
-        const age = Date.now() - (Number.isFinite(ts) ? ts : 0);
-        if (!Number.isFinite(ts) || age > LOCK_MAX_AGE_MS) {
+        const ageByBody = Number.isFinite(ts) ? Date.now() - ts : Number.POSITIVE_INFINITY;
+        let ageByMtime = 0;
+        try { ageByMtime = Date.now() - fsStat(lockPath).mtimeMs; } catch { ageByMtime = 0; }
+        const effectiveAge = Number.isFinite(ts) ? ageByBody : ageByMtime;
+        if (effectiveAge > LOCK_MAX_AGE_MS) {
           try { fsUnlink(lockPath); } catch { /* race; recheck below */ }
           try { return acquire(); } catch { return false; }
         }
@@ -535,26 +546,36 @@ function detectOpenclawGateAgent(): GateAgent | null {
   return null;
 }
 
-function spawnOpenclawSkillifyWorker(a: OpenclawSpawnArgs): void {
+/**
+ * Returns true when the worker was actually spawned (the caller can
+ * record the session in the per-runtime dedup set). Returns false on
+ * any "didn't spawn" outcome — missing worker, no delegate gate CLI,
+ * lock not acquired, mkdir/config write failure, or spawn() throw —
+ * so the caller can let a future agent_end retry. CodeRabbit on #172
+ * caught the previous flow that recorded the session before knowing
+ * whether spawn succeeded, suppressing retries forever within the
+ * runtime.
+ */
+function spawnOpenclawSkillifyWorker(a: OpenclawSpawnArgs): boolean {
   if (!fsExists(OPENCLAW_SKILLIFY_WORKER_PATH)) {
     a.loggerWarn?.(`skillify worker missing at ${OPENCLAW_SKILLIFY_WORKER_PATH} — reinstall openclaw plugin`);
-    return;
+    return false;
   }
   const gateAgent = detectOpenclawGateAgent();
   if (!gateAgent) {
     a.loggerWarn?.(`skillify spawn: no delegate gate CLI found on PATH (need one of: claude, codex, cursor-agent, hermes, pi). Mining skipped.`);
-    return;
+    return false;
   }
   const { key: projectKey, project } = deriveOpenclawProjectKey(a.channel);
   if (!tryAcquireOpenclawSkillifyLock(projectKey)) {
     // A worker is already running for this project — skip (next agent_end may
     // re-fire after the worker releases the lock, or the worker watermark
     // advance makes the re-fire a no-op).
-    return;
+    return false;
   }
   const tmpDir = joinPath(tmpdir(), `deeplake-skillify-openclaw-${projectKey}-${Date.now()}`);
   try { fsMkdir(tmpDir, { recursive: true, mode: 0o700 }); }
-  catch (e: any) { a.loggerWarn?.(`skillify spawn: mkdir failed: ${e?.message ?? e}`); return; }
+  catch (e: any) { a.loggerWarn?.(`skillify spawn: mkdir failed: ${e?.message ?? e}`); return false; }
   const configPath = joinPath(tmpDir, "config.json");
 
   // install: "global" — openclaw has no per-project filesystem cwd, so written
@@ -595,7 +616,7 @@ function spawnOpenclawSkillifyWorker(a: OpenclawSpawnArgs): void {
     },
   };
   try { fsWriteFile(configPath, JSON.stringify(config), { mode: 0o600 }); }
-  catch (e: any) { a.loggerWarn?.(`skillify spawn: config write failed: ${e?.message ?? e}`); return; }
+  catch (e: any) { a.loggerWarn?.(`skillify spawn: config write failed: ${e?.message ?? e}`); return false; }
 
   try {
     realSpawn(process.execPath, [OPENCLAW_SKILLIFY_WORKER_PATH, configPath], {
@@ -603,8 +624,10 @@ function spawnOpenclawSkillifyWorker(a: OpenclawSpawnArgs): void {
       stdio: "ignore",
       env: { ...inheritedEnv.env, HIVEMIND_SKILLIFY_WORKER: "1", HIVEMIND_CAPTURE: "false" },
     }).unref();
+    return true;
   } catch (e: any) {
     a.loggerWarn?.(`skillify spawn: spawn failed: ${e?.message ?? e}`);
+    return false;
   }
 }
 
@@ -1314,9 +1337,15 @@ export default definePluginEntry({
           // processes (e.g. multiple gateway restarts); this Set only
           // suppresses redundant spawns within the same runtime.
           if (!skillifySpawnedFor.has(sid)) {
-            skillifySpawnedFor.add(sid);
+            // Only record the session as deduped on SUCCESSFUL spawn.
+            // spawnOpenclawSkillifyWorker has multiple non-exception
+            // failure paths (no delegate CLI, lock held by a fresh
+            // worker, mkdir/config write failure, spawn throw). If we
+            // add to the set before knowing the outcome, one transient
+            // failure suppresses every retry for the rest of the
+            // runtime. CodeRabbit on #172.
             try {
-              spawnOpenclawSkillifyWorker({
+              if (spawnOpenclawSkillifyWorker({
                 apiUrl: cfg.apiUrl,
                 token: cfg.token,
                 orgId: cfg.orgId,
@@ -1329,7 +1358,9 @@ export default definePluginEntry({
                 // register-time. The worker will repopulate its own
                 // globalThis from this.
                 tuning: (globalThis as Record<string, unknown>).__hivemind_tuning__ as Record<string, string | undefined> | undefined,
-              });
+              })) {
+                skillifySpawnedFor.add(sid);
+              }
             } catch (e: any) {
               logger.error(`Skillify spawn threw: ${e?.message ?? e}`);
             }
