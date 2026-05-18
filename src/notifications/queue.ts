@@ -21,10 +21,24 @@ const log = (msg: string) => _log("notifications-queue", msg);
 // Cross-process lock parameters for enqueueNotification's
 // read-modify-write. Lock file lives next to the queue. Stale-lock
 // reclaim threshold is well above any plausible enqueue duration
-// (a few ms) but below any session-start timeout.
-const LOCK_RETRY_MAX = 50;
-const LOCK_RETRY_BASE_MS = 5;
-const LOCK_STALE_MS = 5000;
+// (a few ms) but below any session-start timeout. Tests override these
+// via `_setLockTimingForTesting` so the give-up / reclaim branches don't
+// have to wait 6 s of real time per test.
+let LOCK_RETRY_MAX = 50;
+let LOCK_RETRY_BASE_MS = 5;
+let LOCK_STALE_MS = 5000;
+
+export function _setLockTimingForTesting(opts: { retryMax?: number; retryBaseMs?: number; staleMs?: number }): void {
+  if (opts.retryMax !== undefined) LOCK_RETRY_MAX = opts.retryMax;
+  if (opts.retryBaseMs !== undefined) LOCK_RETRY_BASE_MS = opts.retryBaseMs;
+  if (opts.staleMs !== undefined) LOCK_STALE_MS = opts.staleMs;
+}
+
+export function _resetLockTimingForTesting(): void {
+  LOCK_RETRY_MAX = 50;
+  LOCK_RETRY_BASE_MS = 5;
+  LOCK_STALE_MS = 5000;
+}
 
 export function queuePath(): string {
   return join(homedir(), ".deeplake", "notifications-queue.json");

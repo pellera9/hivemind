@@ -631,6 +631,43 @@ describe("EmbedClient — hello handshake / stuck daemon recycle", () => {
     expect(embedCount).toBe(3);
   });
 
+  it("recycled probe + autoSpawn=true triggers spawn attempt and retries embed via waitForDaemonReady", async () => {
+    // Drives the retry path: verifyDaemonOnce returns "recycled", the
+    // outer wrapper calls trySpawnDaemon() + waitForDaemonReady(), then
+    // calls embedAttempt() a second time. With no real daemon spawn
+    // available (no daemonEntry on disk), the retry's connectOnce() will
+    // fail and the wrapper returns null. The point of this test is to
+    // exercise the waitForDaemonReady() poll-deadline branch and the
+    // outer retry composition, not to assert a successful round-trip.
+    const dir = makeTmpDir();
+    let helloCount = 0;
+    let embedCount = 0;
+    await startFakeDaemon(dir, (req) => {
+      if (req.op === "hello") { helloCount += 1; return { id: req.id, ready: true } as any; }
+      embedCount += 1;
+      return { id: req.id, embedding: [0.1] };
+    });
+    const client = new EmbedClient({
+      socketDir: dir,
+      timeoutMs: 200,
+      // autoSpawn ON exercises the new retry path…
+      autoSpawn: true,
+      // …but daemonEntry points at a non-existent file, so the
+      // trySpawnDaemon call inside the retry no-ops (existsSync(daemonEntry)
+      // check inside trySpawnDaemon short-circuits) and waitForDaemonReady
+      // runs out its deadline without seeing a new sock file.
+      daemonEntry: "/nonexistent-bundle-path/embed-daemon.js",
+      // Keep the spawn-wait short so the test doesn't sit on the deadline.
+      spawnWaitMs: 100,
+    });
+    const v = await client.embed("retry-with-autospawn");
+    expect(v).toBeNull();
+    // Probe ran once on the stale socket (no daemonPath → recycle).
+    // Verify embed wasn't sent on the dead connection either time.
+    expect(embedCount).toBe(0);
+    expect(helloCount).toBe(1);
+  });
+
   it("recycled probe + autoSpawn=false returns null cleanly (no hang on dead socket)", async () => {
     // Regression for CodeRabbit #9: previously `embed()` proceeded with
     // its embed request on the SAME socket after `verifyDaemonOnce()`

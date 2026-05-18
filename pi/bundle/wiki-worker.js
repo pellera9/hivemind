@@ -151,7 +151,7 @@ async function uploadSummary(query2, params) {
 // dist/src/embeddings/client.js
 import { connect } from "node:net";
 import { spawn } from "node:child_process";
-import { openSync as openSync2, closeSync as closeSync2, writeSync as writeSync2, unlinkSync as unlinkSync2, existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
+import { openSync as openSync3, closeSync as closeSync3, writeSync as writeSync2, unlinkSync as unlinkSync3, existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join6 } from "node:path";
 
@@ -167,12 +167,18 @@ function pidPathFor(uid, dir = DEFAULT_SOCKET_DIR) {
 }
 
 // dist/src/notifications/queue.js
-import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, renameSync as renameSync2, mkdirSync as mkdirSync2 } from "node:fs";
+import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, renameSync as renameSync2, mkdirSync as mkdirSync2, openSync as openSync2, closeSync as closeSync2, unlinkSync as unlinkSync2, statSync } from "node:fs";
 import { join as join3, resolve } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log2 = (msg) => log("notifications-queue", msg);
+var LOCK_RETRY_MAX = 50;
+var LOCK_RETRY_BASE_MS = 5;
+var LOCK_STALE_MS = 5e3;
 function queuePath() {
   return join3(homedir3(), ".deeplake", "notifications-queue.json");
+}
+function lockPath2() {
+  return `${queuePath()}.lock`;
 }
 function readQueue() {
   try {
@@ -198,10 +204,63 @@ function writeQueue(q) {
   writeFileSync2(tmp, JSON.stringify(q, null, 2), { mode: 384 });
   renameSync2(tmp, path);
 }
+function withQueueLock(fn) {
+  const path = lockPath2();
+  mkdirSync2(join3(homedir3(), ".deeplake"), { recursive: true, mode: 448 });
+  let fd = null;
+  for (let attempt = 0; attempt < LOCK_RETRY_MAX; attempt++) {
+    try {
+      fd = openSync2(path, "wx", 384);
+      break;
+    } catch (e) {
+      const code = e.code;
+      if (code !== "EEXIST")
+        throw e;
+      try {
+        const age = Date.now() - statSync(path).mtimeMs;
+        if (age > LOCK_STALE_MS) {
+          unlinkSync2(path);
+          continue;
+        }
+      } catch {
+      }
+      const delay = LOCK_RETRY_BASE_MS * (attempt + 1);
+      const end = Date.now() + delay;
+      while (Date.now() < end) {
+      }
+    }
+  }
+  if (fd === null) {
+    log2(`lock acquisition gave up after ${LOCK_RETRY_MAX} attempts \u2014 proceeding unlocked (last-writer-wins)`);
+    return fn();
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      closeSync2(fd);
+    } catch {
+    }
+    try {
+      unlinkSync2(path);
+    } catch {
+    }
+  }
+}
+function sameDedupKey(a, b) {
+  if (a.id !== b.id)
+    return false;
+  return JSON.stringify(a.dedupKey) === JSON.stringify(b.dedupKey);
+}
 function enqueueNotification(n) {
-  const q = readQueue();
-  q.queue.push(n);
-  writeQueue(q);
+  withQueueLock(() => {
+    const q = readQueue();
+    if (q.queue.some((existing) => sameDedupKey(existing, n))) {
+      return;
+    }
+    q.queue.push(n);
+    writeQueue(q);
+  });
 }
 
 // dist/src/embeddings/disable.js
@@ -365,6 +424,24 @@ var EmbedClient = class {
    * keep poisoning every session until its 10-minute idle-out fires.
    */
   async embed(text, kind = "document") {
+    const v = await this.embedAttempt(text, kind);
+    if (v !== "recycled")
+      return v;
+    if (!this.autoSpawn)
+      return null;
+    this.trySpawnDaemon();
+    await this.waitForDaemonReady();
+    const retry = await this.embedAttempt(text, kind);
+    return retry === "recycled" ? null : retry;
+  }
+  /**
+   * One round-trip: connect → verify → embed. Returns:
+   *  - number[]  : embedding vector (happy path)
+   *  - null      : timeout / daemon error / transformers-missing
+   *  - "recycled": verifyDaemonOnce killed the daemon mid-call;
+   *                caller should respawn and retry once.
+   */
+  async embedAttempt(text, kind) {
     let sock;
     try {
       sock = await this.connectOnce();
@@ -374,7 +451,10 @@ var EmbedClient = class {
       return null;
     }
     try {
-      await this.verifyDaemonOnce(sock);
+      const recycled = await this.verifyDaemonOnce(sock);
+      if (recycled) {
+        return "recycled";
+      }
       const id = String(++this.nextId);
       const req = { op: "embed", id, kind, text };
       const resp = await this.sendAndWait(sock, req);
@@ -399,43 +479,64 @@ var EmbedClient = class {
     }
   }
   /**
+   * Poll for the sock file to come back after `trySpawnDaemon` — used by
+   * the recycle retry path. Best-effort: caps at `spawnWaitMs` and
+   * returns regardless so the retry attempt can run.
+   */
+  async waitForDaemonReady() {
+    const deadline = Date.now() + this.spawnWaitMs;
+    while (Date.now() < deadline) {
+      if (existsSync3(this.socketPath))
+        return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  /**
    * Send a `hello` on first successful connect per EmbedClient instance.
    * If the daemon answers with a path that doesn't match our configured
    * daemonEntry — typical after a marketplace upgrade replaced the bundle
    * — SIGTERM the daemon + clear sock/pid so the next call spawns from the
-   * current bundle. We mark `helloVerified` even on mismatch so we don't
-   * re-issue the hello against the next, fresh connection.
+   * current bundle.
+   *
+   * `helloVerified` is set ONLY after we've seen a compatible response,
+   * so a transient probe failure or a recycle-triggering mismatch leaves
+   * the flag false; the next reconnect re-runs verification against
+   * whatever daemon is then live (typically the fresh spawn).
    */
   async verifyDaemonOnce(sock) {
     if (this.helloVerified)
-      return;
-    this.helloVerified = true;
-    if (!this.daemonEntry)
-      return;
+      return false;
+    if (!this.daemonEntry) {
+      this.helloVerified = true;
+      return false;
+    }
     const id = String(++this.nextId);
     const req = { op: "hello", id };
     let resp;
     try {
       resp = await this.sendAndWait(sock, req);
     } catch (e) {
-      log3(`hello probe failed (treating as compatible): ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      log3(`hello probe failed (inconclusive, will retry next connect): ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     }
     const hello = resp;
-    if (_recycledStuckDaemon)
-      return;
+    if (_recycledStuckDaemon) {
+      return false;
+    }
     if (!hello.daemonPath) {
       _recycledStuckDaemon = true;
       log3(`daemon does not implement hello (older protocol); recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
     if (hello.daemonPath !== this.daemonEntry && !existsSync3(hello.daemonPath)) {
       _recycledStuckDaemon = true;
       log3(`daemon path no longer on disk \u2014 running=${hello.daemonPath} (gone) expected=${this.daemonEntry}; recycling`);
       this.recycleDaemon(hello.pid);
-      return;
+      return true;
     }
+    this.helloVerified = true;
+    return false;
   }
   /**
    * On a transformers-missing error from the daemon, SIGTERM the stuck
@@ -493,11 +594,11 @@ var EmbedClient = class {
       }
     }
     try {
-      unlinkSync2(this.socketPath);
+      unlinkSync3(this.socketPath);
     } catch {
     }
     try {
-      unlinkSync2(this.pidPath);
+      unlinkSync3(this.pidPath);
     } catch {
     }
   }
@@ -543,16 +644,16 @@ var EmbedClient = class {
   trySpawnDaemon() {
     let fd;
     try {
-      fd = openSync2(this.pidPath, "wx", 384);
+      fd = openSync3(this.pidPath, "wx", 384);
       writeSync2(fd, String(process.pid));
     } catch (e) {
       if (this.isPidFileStale()) {
         try {
-          unlinkSync2(this.pidPath);
+          unlinkSync3(this.pidPath);
         } catch {
         }
         try {
-          fd = openSync2(this.pidPath, "wx", 384);
+          fd = openSync3(this.pidPath, "wx", 384);
           writeSync2(fd, String(process.pid));
         } catch {
           return;
@@ -564,8 +665,8 @@ var EmbedClient = class {
     if (!this.daemonEntry || !existsSync3(this.daemonEntry)) {
       log3(`daemonEntry not configured or missing: ${this.daemonEntry}`);
       try {
-        closeSync2(fd);
-        unlinkSync2(this.pidPath);
+        closeSync3(fd);
+        unlinkSync3(this.pidPath);
       } catch {
       }
       return;
@@ -579,7 +680,7 @@ var EmbedClient = class {
       child.unref();
       log3(`spawned daemon pid=${child.pid}`);
     } finally {
-      closeSync2(fd);
+      closeSync3(fd);
     }
   }
   isPidFileStale() {
@@ -650,7 +751,9 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 function isTransformersMissingError(err) {
-  return /(@huggingface\/transformers|hivemind embeddings install|MODULE_NOT_FOUND)/i.test(err);
+  if (/hivemind embeddings install/i.test(err))
+    return true;
+  return /@huggingface\/transformers/i.test(err);
 }
 
 // dist/src/utils/client-header.js
