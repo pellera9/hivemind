@@ -23501,11 +23501,21 @@ function maybeSignalBalanceExhausted(status, bodyText) {
     id: "balance-exhausted",
     severity: "warn",
     title: "Hivemind credits exhausted \u2014 top up to keep capturing",
-    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero", date: date4 }
   }).catch((e) => {
     log3(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
   });
+}
+function billingUrl() {
+  try {
+    const c = loadCredentials();
+    if (c?.orgName && c?.workspaceId) {
+      return `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch {
+  }
+  return "https://deeplake.ai";
 }
 var RETRYABLE_CODES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var MAX_RETRIES = 3;

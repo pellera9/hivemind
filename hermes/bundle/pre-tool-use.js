@@ -16,21 +16,21 @@ __export(index_marker_store_exports, {
   hasFreshIndexMarker: () => hasFreshIndexMarker,
   writeIndexMarker: () => writeIndexMarker
 });
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { tmpdir } from "node:os";
 function getIndexMarkerDir() {
-  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join4(tmpdir(), "hivemind-deeplake-indexes");
+  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join5(tmpdir(), "hivemind-deeplake-indexes");
 }
 function buildIndexMarkerPath(workspaceId, orgId, table, suffix) {
   const markerKey = [workspaceId, orgId, table, suffix].join("__").replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return join4(getIndexMarkerDir(), `${markerKey}.json`);
+  return join5(getIndexMarkerDir(), `${markerKey}.json`);
 }
 function hasFreshIndexMarker(markerPath) {
   if (!existsSync2(markerPath))
     return false;
   try {
-    const raw = JSON.parse(readFileSync3(markerPath, "utf-8"));
+    const raw = JSON.parse(readFileSync4(markerPath, "utf-8"));
     const updatedAt = raw.updatedAt ? new Date(raw.updatedAt).getTime() : NaN;
     if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > INDEX_MARKER_TTL_MS)
       return false;
@@ -40,8 +40,8 @@ function hasFreshIndexMarker(markerPath) {
   }
 }
 function writeIndexMarker(markerPath) {
-  mkdirSync2(getIndexMarkerDir(), { recursive: true });
-  writeFileSync2(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
+  mkdirSync3(getIndexMarkerDir(), { recursive: true });
+  writeFileSync3(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
 }
 var INDEX_MARKER_TTL_MS;
 var init_index_marker_store = __esm({
@@ -247,6 +247,24 @@ async function enqueueNotification(n) {
   });
 }
 
+// dist/src/commands/auth-creds.js
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+function configDir() {
+  return join4(homedir4(), ".deeplake");
+}
+function credsPath() {
+  return join4(configDir(), "credentials.json");
+}
+function loadCredentials() {
+  try {
+    return JSON.parse(readFileSync3(credsPath(), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 // dist/src/deeplake-api.js
 var indexMarkerStorePromise = null;
 function getIndexMarkerStore() {
@@ -283,11 +301,21 @@ function maybeSignalBalanceExhausted(status, bodyText) {
     id: "balance-exhausted",
     severity: "warn",
     title: "Hivemind credits exhausted \u2014 top up to keep capturing",
-    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero", date }
   }).catch((e) => {
     log3(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
   });
+}
+function billingUrl() {
+  try {
+    const c = loadCredentials();
+    if (c?.orgName && c?.workspaceId) {
+      return `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch {
+  }
+  return "https://deeplake.ai";
 }
 var RETRYABLE_CODES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var MAX_RETRIES = 3;
@@ -1165,9 +1193,9 @@ function capOutputForClaude(output, options = {}) {
 // dist/src/embeddings/client.js
 import { connect } from "node:net";
 import { spawn } from "node:child_process";
-import { openSync as openSync2, closeSync as closeSync2, writeSync, unlinkSync as unlinkSync2, existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join5 } from "node:path";
+import { openSync as openSync2, closeSync as closeSync2, writeSync, unlinkSync as unlinkSync3, existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join6 } from "node:path";
 
 // dist/src/embeddings/protocol.js
 var DEFAULT_SOCKET_DIR = "/tmp";
@@ -1181,7 +1209,7 @@ function pidPathFor(uid, dir = DEFAULT_SOCKET_DIR) {
 }
 
 // dist/src/embeddings/client.js
-var SHARED_DAEMON_PATH = join5(homedir4(), ".hivemind", "embed-deps", "embed-daemon.js");
+var SHARED_DAEMON_PATH = join6(homedir5(), ".hivemind", "embed-deps", "embed-daemon.js");
 var log4 = (m) => log("embed-client", m);
 function getUid() {
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
@@ -1372,7 +1400,7 @@ var EmbedClient = class {
     let pid = reportedPid;
     if (pid === null) {
       try {
-        pid = Number.parseInt(readFileSync4(this.pidPath, "utf-8").trim(), 10);
+        pid = Number.parseInt(readFileSync5(this.pidPath, "utf-8").trim(), 10);
       } catch {
       }
     }
@@ -1385,11 +1413,11 @@ var EmbedClient = class {
       log4(`recycle: socket gone, skipping SIGTERM on possibly-stale pid ${pid}`);
     }
     try {
-      unlinkSync2(this.socketPath);
+      unlinkSync3(this.socketPath);
     } catch {
     }
     try {
-      unlinkSync2(this.pidPath);
+      unlinkSync3(this.pidPath);
     } catch {
     }
   }
@@ -1440,7 +1468,7 @@ var EmbedClient = class {
     } catch (e) {
       if (this.isPidFileStale()) {
         try {
-          unlinkSync2(this.pidPath);
+          unlinkSync3(this.pidPath);
         } catch {
         }
         try {
@@ -1457,7 +1485,7 @@ var EmbedClient = class {
       log4(`daemonEntry not configured or missing: ${this.daemonEntry}`);
       try {
         closeSync2(fd);
-        unlinkSync2(this.pidPath);
+        unlinkSync3(this.pidPath);
       } catch {
       }
       return;
@@ -1476,7 +1504,7 @@ var EmbedClient = class {
   }
   isPidFileStale() {
     try {
-      const raw = readFileSync4(this.pidPath, "utf-8").trim();
+      const raw = readFileSync5(this.pidPath, "utf-8").trim();
       const pid = Number(raw);
       if (!pid || Number.isNaN(pid))
         return true;
@@ -1549,15 +1577,15 @@ function isTransformersMissingError(err) {
 
 // dist/src/embeddings/disable.js
 import { createRequire } from "node:module";
-import { homedir as homedir6 } from "node:os";
-import { join as join7 } from "node:path";
+import { homedir as homedir7 } from "node:os";
+import { join as join8 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // dist/src/user-config.js
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { dirname, join as join6 } from "node:path";
-var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join6(homedir5(), ".deeplake", "config.json");
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { dirname, join as join7 } from "node:path";
+var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join7(homedir6(), ".deeplake", "config.json");
 var _cache = null;
 var _migrated = false;
 function readUserConfig() {
@@ -1569,7 +1597,7 @@ function readUserConfig() {
     return _cache;
   }
   try {
-    const raw = readFileSync5(path, "utf-8");
+    const raw = readFileSync6(path, "utf-8");
     const parsed = JSON.parse(raw);
     _cache = isPlainObject(parsed) ? parsed : {};
   } catch {
@@ -1583,9 +1611,9 @@ function writeUserConfig(patch) {
   const path = _configPath();
   const dir = dirname(path);
   if (!existsSync4(dir))
-    mkdirSync3(dir, { recursive: true });
+    mkdirSync4(dir, { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync3(tmp, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+  writeFileSync4(tmp, JSON.stringify(merged, null, 2) + "\n", "utf-8");
   renameSync2(tmp, path);
   _cache = merged;
   return merged;
@@ -1635,7 +1663,7 @@ function deepMerge(base, patch) {
 // dist/src/embeddings/disable.js
 var cachedStatus = null;
 function defaultResolveTransformers() {
-  const sharedDir = join7(homedir6(), ".hivemind", "embed-deps");
+  const sharedDir = join8(homedir7(), ".hivemind", "embed-deps");
   try {
     createRequire(pathToFileURL(`${sharedDir}/`).href).resolve("@huggingface/transformers");
     return;
@@ -1667,11 +1695,11 @@ function embeddingsDisabled() {
 
 // dist/src/hooks/grep-direct.js
 import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join8 } from "node:path";
+import { dirname as dirname2, join as join9 } from "node:path";
 var SEMANTIC_ENABLED = process.env.HIVEMIND_SEMANTIC_SEARCH !== "false" && !embeddingsDisabled();
 var SEMANTIC_TIMEOUT_MS = Number(process.env.HIVEMIND_SEMANTIC_EMBED_TIMEOUT_MS ?? "500");
 function resolveDaemonPath() {
-  return join8(dirname2(fileURLToPath(import.meta.url)), "..", "embeddings", "embed-daemon.js");
+  return join9(dirname2(fileURLToPath(import.meta.url)), "..", "embeddings", "embed-daemon.js");
 }
 var sharedEmbedClient = null;
 function getEmbedClient() {
@@ -2024,9 +2052,9 @@ async function handleGrepDirect(api, table, sessionsTable, params) {
 }
 
 // dist/src/hooks/memory-path-utils.js
-import { homedir as homedir7 } from "node:os";
-import { join as join9 } from "node:path";
-var MEMORY_PATH = join9(homedir7(), ".deeplake", "memory");
+import { homedir as homedir8 } from "node:os";
+import { join as join10 } from "node:path";
+var MEMORY_PATH = join10(homedir8(), ".deeplake", "memory");
 var TILDE_PATH = "~/.deeplake/memory";
 var HOME_VAR_PATH = "$HOME/.deeplake/memory";
 function touchesMemory(p) {

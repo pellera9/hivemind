@@ -16,21 +16,21 @@ __export(index_marker_store_exports, {
   hasFreshIndexMarker: () => hasFreshIndexMarker,
   writeIndexMarker: () => writeIndexMarker
 });
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { tmpdir } from "node:os";
 function getIndexMarkerDir() {
-  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join4(tmpdir(), "hivemind-deeplake-indexes");
+  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join5(tmpdir(), "hivemind-deeplake-indexes");
 }
 function buildIndexMarkerPath(workspaceId, orgId, table, suffix) {
   const markerKey = [workspaceId, orgId, table, suffix].join("__").replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return join4(getIndexMarkerDir(), `${markerKey}.json`);
+  return join5(getIndexMarkerDir(), `${markerKey}.json`);
 }
 function hasFreshIndexMarker(markerPath) {
   if (!existsSync2(markerPath))
     return false;
   try {
-    const raw = JSON.parse(readFileSync3(markerPath, "utf-8"));
+    const raw = JSON.parse(readFileSync4(markerPath, "utf-8"));
     const updatedAt = raw.updatedAt ? new Date(raw.updatedAt).getTime() : NaN;
     if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > INDEX_MARKER_TTL_MS)
       return false;
@@ -40,8 +40,8 @@ function hasFreshIndexMarker(markerPath) {
   }
 }
 function writeIndexMarker(markerPath) {
-  mkdirSync2(getIndexMarkerDir(), { recursive: true });
-  writeFileSync2(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
+  mkdirSync3(getIndexMarkerDir(), { recursive: true });
+  writeFileSync3(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
 }
 var INDEX_MARKER_TTL_MS;
 var init_index_marker_store = __esm({
@@ -227,6 +227,24 @@ async function enqueueNotification(n) {
   });
 }
 
+// dist/src/commands/auth-creds.js
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+function configDir() {
+  return join4(homedir4(), ".deeplake");
+}
+function credsPath() {
+  return join4(configDir(), "credentials.json");
+}
+function loadCredentials() {
+  try {
+    return JSON.parse(readFileSync3(credsPath(), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 // dist/src/deeplake-api.js
 var indexMarkerStorePromise = null;
 function getIndexMarkerStore() {
@@ -263,11 +281,21 @@ function maybeSignalBalanceExhausted(status, bodyText) {
     id: "balance-exhausted",
     severity: "warn",
     title: "Hivemind credits exhausted \u2014 top up to keep capturing",
-    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero", date }
   }).catch((e) => {
     log3(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
   });
+}
+function billingUrl() {
+  try {
+    const c = loadCredentials();
+    if (c?.orgName && c?.workspaceId) {
+      return `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch {
+  }
+  return "https://deeplake.ai";
 }
 var RETRYABLE_CODES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var MAX_RETRIES = 3;
@@ -664,14 +692,14 @@ var DeeplakeApi = class {
 };
 
 // dist/src/skillify/pull.js
-import { existsSync as existsSync7, readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, renameSync as renameSync4, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync3 } from "node:fs";
-import { homedir as homedir8 } from "node:os";
-import { dirname as dirname2, join as join9 } from "node:path";
+import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync as writeFileSync6, mkdirSync as mkdirSync6, renameSync as renameSync4, lstatSync as lstatSync2, readlinkSync, symlinkSync, unlinkSync as unlinkSync4 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { dirname as dirname2, join as join10 } from "node:path";
 
 // dist/src/skillify/skill-writer.js
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync, statSync as statSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join6 } from "node:path";
 function assertValidSkillName(name) {
   if (typeof name !== "string" || name.length === 0) {
     throw new Error(`invalid skill name: empty or non-string`);
@@ -737,23 +765,23 @@ function parseFrontmatter(text) {
 }
 
 // dist/src/skillify/manifest.js
-import { existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync3, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { dirname, join as join7 } from "node:path";
+import { existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync3, unlinkSync as unlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname, join as join8 } from "node:path";
 
 // dist/src/skillify/legacy-migration.js
 import { existsSync as existsSync4, renameSync as renameSync2 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join6 } from "node:path";
+import { homedir as homedir6 } from "node:os";
+import { join as join7 } from "node:path";
 var dlog = (msg) => log("skillify-migrate", msg);
 var attempted = false;
 function migrateLegacyStateDir() {
   if (attempted)
     return;
   attempted = true;
-  const root = join6(homedir5(), ".deeplake", "state");
-  const legacy = join6(root, "skilify");
-  const current = join6(root, "skillify");
+  const root = join7(homedir6(), ".deeplake", "state");
+  const legacy = join7(root, "skilify");
+  const current = join7(root, "skillify");
   if (!existsSync4(legacy))
     return;
   if (existsSync4(current))
@@ -776,7 +804,7 @@ function emptyManifest() {
   return { version: 1, entries: [] };
 }
 function manifestPath() {
-  return join7(homedir6(), ".deeplake", "state", "skillify", "pulled.json");
+  return join8(homedir7(), ".deeplake", "state", "skillify", "pulled.json");
 }
 function loadManifest(path = manifestPath()) {
   migrateLegacyStateDir();
@@ -784,7 +812,7 @@ function loadManifest(path = manifestPath()) {
     return emptyManifest();
   let raw;
   try {
-    raw = readFileSync5(path, "utf-8");
+    raw = readFileSync6(path, "utf-8");
   } catch {
     return emptyManifest();
   }
@@ -831,9 +859,9 @@ function loadManifest(path = manifestPath()) {
 }
 function saveManifest(m, path = manifestPath()) {
   migrateLegacyStateDir();
-  mkdirSync4(dirname(path), { recursive: true });
+  mkdirSync5(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
-  writeFileSync4(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
+  writeFileSync5(tmp, JSON.stringify(m, null, 2) + "\n", { mode: 384 });
   renameSync3(tmp, path);
 }
 function recordPull(entry, path = manifestPath()) {
@@ -859,7 +887,7 @@ function unlinkSymlinks(paths) {
     if (!st.isSymbolicLink())
       continue;
     try {
-      unlinkSync2(path);
+      unlinkSync3(path);
     } catch {
     }
   }
@@ -869,7 +897,7 @@ function pruneOrphanedEntries(path = manifestPath()) {
   const live = [];
   let pruned = 0;
   for (const e of m.entries) {
-    if (existsSync5(join7(e.installRoot, e.dirName))) {
+    if (existsSync5(join8(e.installRoot, e.dirName))) {
       live.push(e);
       continue;
     }
@@ -883,25 +911,25 @@ function pruneOrphanedEntries(path = manifestPath()) {
 
 // dist/src/skillify/agent-roots.js
 import { existsSync as existsSync6 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join8 } from "node:path";
+import { homedir as homedir8 } from "node:os";
+import { join as join9 } from "node:path";
 function resolveDetected(home) {
   const out = [];
-  const codexInstalled = existsSync6(join8(home, ".codex"));
-  const piInstalled = existsSync6(join8(home, ".pi", "agent"));
-  const hermesInstalled = existsSync6(join8(home, ".hermes"));
+  const codexInstalled = existsSync6(join9(home, ".codex"));
+  const piInstalled = existsSync6(join9(home, ".pi", "agent"));
+  const hermesInstalled = existsSync6(join9(home, ".hermes"));
   if (codexInstalled || piInstalled) {
-    out.push(join8(home, ".agents", "skills"));
+    out.push(join9(home, ".agents", "skills"));
   }
   if (hermesInstalled) {
-    out.push(join8(home, ".hermes", "skills"));
+    out.push(join9(home, ".hermes", "skills"));
   }
   if (piInstalled) {
-    out.push(join8(home, ".pi", "agent", "skills"));
+    out.push(join9(home, ".pi", "agent", "skills"));
   }
   return out;
 }
-function detectAgentSkillsRoots(canonicalRoot, home = homedir7()) {
+function detectAgentSkillsRoots(canonicalRoot, home = homedir8()) {
   return resolveDetected(home).filter((p) => p !== canonicalRoot);
 }
 
@@ -945,15 +973,15 @@ function isMissingTableError(message) {
 }
 function resolvePullDestination(install, cwd) {
   if (install === "global")
-    return join9(homedir8(), ".claude", "skills");
+    return join10(homedir9(), ".claude", "skills");
   if (!cwd)
     throw new Error("install=project requires a cwd");
-  return join9(cwd, ".claude", "skills");
+  return join10(cwd, ".claude", "skills");
 }
 function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
   const out = [];
   for (const root of agentRoots) {
-    const link = join9(root, dirName);
+    const link = join10(root, dirName);
     let existing;
     try {
       existing = lstatSync2(link);
@@ -975,13 +1003,13 @@ function fanOutSymlinks(canonicalDir, dirName, agentRoots) {
         continue;
       }
       try {
-        unlinkSync3(link);
+        unlinkSync4(link);
       } catch {
         continue;
       }
     }
     try {
-      mkdirSync5(dirname2(link), { recursive: true });
+      mkdirSync6(dirname2(link), { recursive: true });
       symlinkSync(canonicalDir, link, "dir");
       out.push(link);
     } catch {
@@ -996,7 +1024,7 @@ function backfillSymlinks(installRoot) {
     return;
   const detected = detectAgentSkillsRoots(installRoot);
   for (const entry of entries) {
-    const canonical = join9(entry.installRoot, entry.dirName);
+    const canonical = join10(entry.installRoot, entry.dirName);
     if (!existsSync7(canonical))
       continue;
     const fresh = fanOutSymlinks(canonical, entry.dirName, detected);
@@ -1110,7 +1138,7 @@ function readLocalVersion(path) {
   if (!existsSync7(path))
     return null;
   try {
-    const text = readFileSync6(path, "utf-8");
+    const text = readFileSync7(path, "utf-8");
     const parsed = parseFrontmatter(text);
     if (!parsed)
       return null;
@@ -1205,8 +1233,8 @@ async function runPull(opts) {
       summary.skipped++;
       continue;
     }
-    const skillDir = join9(root, dirName);
-    const skillFile = join9(skillDir, "SKILL.md");
+    const skillDir = join10(root, dirName);
+    const skillFile = join10(skillDir, "SKILL.md");
     const remoteVersion = Number(row.version ?? 1);
     const localVersion = readLocalVersion(skillFile);
     const action = decideAction({
@@ -1217,14 +1245,14 @@ async function runPull(opts) {
     });
     let manifestError;
     if (action === "wrote") {
-      mkdirSync5(skillDir, { recursive: true });
+      mkdirSync6(skillDir, { recursive: true });
       if (existsSync7(skillFile)) {
         try {
           renameSync4(skillFile, `${skillFile}.bak`);
         } catch {
         }
       }
-      writeFileSync5(skillFile, renderSkillFile(row));
+      writeFileSync6(skillFile, renderSkillFile(row));
       const symlinks = opts.install === "global" ? fanOutSymlinks(skillDir, dirName, detectAgentSkillsRoots(root)) : [];
       try {
         recordPull({

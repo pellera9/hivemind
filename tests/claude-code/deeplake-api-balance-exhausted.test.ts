@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Tests for the balance-exhausted notification path in DeeplakeApi.
@@ -31,15 +34,41 @@ function bodyResp(status: number, body: string): Response {
   return new Response(body, { status, headers: { "Content-Type": "application/json" } });
 }
 
+let TEMP_HOME = "";
+let ORIGINAL_HOME: string | undefined;
+
 beforeEach(async () => {
   fetchMock.mockReset();
   enqueueNotificationMock.mockReset();
   enqueueNotificationMock.mockResolvedValue(undefined);
   const { _resetSdkStateForTesting } = await import("../../src/deeplake-api.js");
   _resetSdkStateForTesting();
+  // Plant credentials in a sandbox HOME so billingUrl() can read orgName +
+  // workspaceId. Tests that want to verify the no-creds fallback delete
+  // the file inside the test body.
+  TEMP_HOME = mkdtempSync(join(tmpdir(), "hivemind-bal-exh-test-"));
+  ORIGINAL_HOME = process.env.HOME;
+  process.env.HOME = TEMP_HOME;
+  mkdirSync(join(TEMP_HOME, ".deeplake"), { recursive: true });
+  writeFileSync(
+    join(TEMP_HOME, ".deeplake", "credentials.json"),
+    JSON.stringify({
+      token: "tok",
+      orgId: "org-uuid",
+      orgName: "acme",
+      userName: "ada",
+      workspaceId: "default",
+      apiUrl: "https://api.example",
+      savedAt: "2026-05-19T00:00:00Z",
+    }),
+    { mode: 0o600 },
+  );
 });
 
 afterEach(() => {
+  if (ORIGINAL_HOME !== undefined) process.env.HOME = ORIGINAL_HOME;
+  else delete process.env.HOME;
+  rmSync(TEMP_HOME, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
@@ -62,6 +91,8 @@ describe("DeeplakeApi — 402 balance-exhausted handling", () => {
     expect(arg.severity).toBe("warn");
     expect(arg.title).toMatch(/credits exhausted/i);
     expect(arg.body).toMatch(/top up/i);
+    // Org-scoped billing URL: deeplake.ai/{orgName}/workspace/{workspaceId}/billing
+    expect(arg.body).toContain("https://deeplake.ai/acme/workspace/default/billing");
     expect(arg.dedupKey.reason).toBe("balance-zero");
     // Date is included so the banner re-fires daily until the user tops up
     // rather than firing once-ever and going quiet.
@@ -100,6 +131,22 @@ describe("DeeplakeApi — 402 balance-exhausted handling", () => {
     const api = await makeApi();
     await expect(api.query("SELECT 1")).rejects.toThrow(/Query failed: 500/);
     expect(enqueueNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to https://deeplake.ai when credentials are missing or malformed", async () => {
+    // Wipe the planted creds — billingUrl() should return the bare host
+    // rather than producing a URL with literal `undefined` segments.
+    rmSync(join(TEMP_HOME, ".deeplake", "credentials.json"));
+    fetchMock.mockResolvedValueOnce(
+      bodyResp(402, JSON.stringify({ balance_cents: 0, error: "insufficient balance, please top up" })),
+    );
+    const api = await makeApi();
+    await expect(api.query("SELECT 1")).rejects.toThrow(/402/);
+    expect(enqueueNotificationMock).toHaveBeenCalledTimes(1);
+    const arg = enqueueNotificationMock.mock.calls[0][0];
+    expect(arg.body).toContain("https://deeplake.ai");
+    expect(arg.body).not.toContain("undefined");
+    expect(arg.body).not.toContain("/workspace/");
   });
 
   it("still throws the original Query failed error (caller's catch path unchanged)", async () => {

@@ -46081,14 +46081,14 @@ var require_turndown_cjs = __commonJS({
         } else if (node.nodeType === 1) {
           replacement = replacementForNode.call(self2, node);
         }
-        return join13(output, replacement);
+        return join14(output, replacement);
       }, "");
     }
     function postProcess(output) {
       var self2 = this;
       this.rules.forEach(function(rule) {
         if (typeof rule.append === "function") {
-          output = join13(output, rule.append(self2.options));
+          output = join14(output, rule.append(self2.options));
         }
       });
       return output.replace(/^[\t\r\n]+/, "").replace(/[\t\r\n\s]+$/, "");
@@ -46100,7 +46100,7 @@ var require_turndown_cjs = __commonJS({
       if (whitespace.leading || whitespace.trailing) content = content.trim();
       return whitespace.leading + rule.replacement(content, node, this.options) + whitespace.trailing;
     }
-    function join13(output, replacement) {
+    function join14(output, replacement) {
       var s12 = trimTrailingNewlines(output);
       var s22 = trimLeadingNewlines(replacement);
       var nls = Math.max(output.length - s12.length, replacement.length - s22.length);
@@ -59941,21 +59941,21 @@ __export(index_marker_store_exports, {
   hasFreshIndexMarker: () => hasFreshIndexMarker,
   writeIndexMarker: () => writeIndexMarker
 });
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 import { tmpdir } from "node:os";
 function getIndexMarkerDir() {
-  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join7(tmpdir(), "hivemind-deeplake-indexes");
+  return process.env.HIVEMIND_INDEX_MARKER_DIR ?? join8(tmpdir(), "hivemind-deeplake-indexes");
 }
 function buildIndexMarkerPath(workspaceId, orgId, table, suffix) {
   const markerKey = [workspaceId, orgId, table, suffix].join("__").replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return join7(getIndexMarkerDir(), `${markerKey}.json`);
+  return join8(getIndexMarkerDir(), `${markerKey}.json`);
 }
 function hasFreshIndexMarker(markerPath) {
   if (!existsSync3(markerPath))
     return false;
   try {
-    const raw = JSON.parse(readFileSync3(markerPath, "utf-8"));
+    const raw = JSON.parse(readFileSync4(markerPath, "utf-8"));
     const updatedAt = raw.updatedAt ? new Date(raw.updatedAt).getTime() : NaN;
     if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > INDEX_MARKER_TTL_MS)
       return false;
@@ -59965,8 +59965,8 @@ function hasFreshIndexMarker(markerPath) {
   }
 }
 function writeIndexMarker(markerPath) {
-  mkdirSync2(getIndexMarkerDir(), { recursive: true });
-  writeFileSync2(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
+  mkdirSync3(getIndexMarkerDir(), { recursive: true });
+  writeFileSync3(markerPath, JSON.stringify({ updatedAt: (/* @__PURE__ */ new Date()).toISOString() }), "utf-8");
 }
 var INDEX_MARKER_TTL_MS;
 var init_index_marker_store = __esm({
@@ -66942,6 +66942,24 @@ async function enqueueNotification(n24) {
   });
 }
 
+// dist/src/commands/auth-creds.js
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join7 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+function configDir() {
+  return join7(homedir4(), ".deeplake");
+}
+function credsPath() {
+  return join7(configDir(), "credentials.json");
+}
+function loadCredentials() {
+  try {
+    return JSON.parse(readFileSync3(credsPath(), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 // dist/src/deeplake-api.js
 var indexMarkerStorePromise = null;
 function getIndexMarkerStore() {
@@ -66978,11 +66996,21 @@ function maybeSignalBalanceExhausted(status, bodyText) {
     id: "balance-exhausted",
     severity: "warn",
     title: "Hivemind credits exhausted \u2014 top up to keep capturing",
-    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero", date }
   }).catch((e6) => {
     log3(`enqueue balance-exhausted failed: ${e6 instanceof Error ? e6.message : String(e6)}`);
   });
+}
+function billingUrl() {
+  try {
+    const c15 = loadCredentials();
+    if (c15?.orgName && c15?.workspaceId) {
+      return `https://deeplake.ai/${encodeURIComponent(c15.orgName)}/workspace/${encodeURIComponent(c15.workspaceId)}/billing`;
+    }
+  } catch {
+  }
+  return "https://deeplake.ai";
 }
 var RETRYABLE_CODES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var MAX_RETRIES = 3;
@@ -67382,7 +67410,7 @@ var DeeplakeApi = class {
 import { basename as basename4, posix } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname as dirname5, join as join11 } from "node:path";
+import { dirname as dirname5, join as join12 } from "node:path";
 
 // dist/src/shell/grep-core.js
 var TOOL_INPUT_FIELDS = [
@@ -67812,9 +67840,9 @@ function refineGrepMatches(rows, params, forceMultiFilePrefix) {
 // dist/src/embeddings/client.js
 import { connect } from "node:net";
 import { spawn } from "node:child_process";
-import { openSync as openSync2, closeSync as closeSync2, writeSync, unlinkSync as unlinkSync2, existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join8 } from "node:path";
+import { openSync as openSync2, closeSync as closeSync2, writeSync, unlinkSync as unlinkSync3, existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join9 } from "node:path";
 
 // dist/src/embeddings/protocol.js
 var DEFAULT_SOCKET_DIR = "/tmp";
@@ -67828,7 +67856,7 @@ function pidPathFor(uid, dir = DEFAULT_SOCKET_DIR) {
 }
 
 // dist/src/embeddings/client.js
-var SHARED_DAEMON_PATH = join8(homedir4(), ".hivemind", "embed-deps", "embed-daemon.js");
+var SHARED_DAEMON_PATH = join9(homedir5(), ".hivemind", "embed-deps", "embed-daemon.js");
 var log4 = (m26) => log("embed-client", m26);
 function getUid() {
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
@@ -68019,7 +68047,7 @@ var EmbedClient = class {
     let pid = reportedPid;
     if (pid === null) {
       try {
-        pid = Number.parseInt(readFileSync4(this.pidPath, "utf-8").trim(), 10);
+        pid = Number.parseInt(readFileSync5(this.pidPath, "utf-8").trim(), 10);
       } catch {
       }
     }
@@ -68032,11 +68060,11 @@ var EmbedClient = class {
       log4(`recycle: socket gone, skipping SIGTERM on possibly-stale pid ${pid}`);
     }
     try {
-      unlinkSync2(this.socketPath);
+      unlinkSync3(this.socketPath);
     } catch {
     }
     try {
-      unlinkSync2(this.pidPath);
+      unlinkSync3(this.pidPath);
     } catch {
     }
   }
@@ -68087,7 +68115,7 @@ var EmbedClient = class {
     } catch (e6) {
       if (this.isPidFileStale()) {
         try {
-          unlinkSync2(this.pidPath);
+          unlinkSync3(this.pidPath);
         } catch {
         }
         try {
@@ -68104,7 +68132,7 @@ var EmbedClient = class {
       log4(`daemonEntry not configured or missing: ${this.daemonEntry}`);
       try {
         closeSync2(fd);
-        unlinkSync2(this.pidPath);
+        unlinkSync3(this.pidPath);
       } catch {
       }
       return;
@@ -68123,7 +68151,7 @@ var EmbedClient = class {
   }
   isPidFileStale() {
     try {
-      const raw = readFileSync4(this.pidPath, "utf-8").trim();
+      const raw = readFileSync5(this.pidPath, "utf-8").trim();
       const pid = Number(raw);
       if (!pid || Number.isNaN(pid))
         return true;
@@ -68209,15 +68237,15 @@ function embeddingSqlLiteral(vec) {
 
 // dist/src/embeddings/disable.js
 import { createRequire } from "node:module";
-import { homedir as homedir6 } from "node:os";
-import { join as join10 } from "node:path";
+import { homedir as homedir7 } from "node:os";
+import { join as join11 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // dist/src/user-config.js
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { dirname as dirname4, join as join9 } from "node:path";
-var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join9(homedir5(), ".deeplake", "config.json");
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { dirname as dirname4, join as join10 } from "node:path";
+var _configPath = () => process.env.HIVEMIND_CONFIG_PATH ?? join10(homedir6(), ".deeplake", "config.json");
 var _cache = null;
 var _migrated = false;
 function readUserConfig() {
@@ -68229,7 +68257,7 @@ function readUserConfig() {
     return _cache;
   }
   try {
-    const raw = readFileSync5(path2, "utf-8");
+    const raw = readFileSync6(path2, "utf-8");
     const parsed = JSON.parse(raw);
     _cache = isPlainObject(parsed) ? parsed : {};
   } catch {
@@ -68243,9 +68271,9 @@ function writeUserConfig(patch) {
   const path2 = _configPath();
   const dir = dirname4(path2);
   if (!existsSync5(dir))
-    mkdirSync3(dir, { recursive: true });
+    mkdirSync4(dir, { recursive: true });
   const tmp = `${path2}.tmp.${process.pid}`;
-  writeFileSync3(tmp, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+  writeFileSync4(tmp, JSON.stringify(merged, null, 2) + "\n", "utf-8");
   renameSync2(tmp, path2);
   _cache = merged;
   return merged;
@@ -68295,7 +68323,7 @@ function deepMerge(base, patch) {
 // dist/src/embeddings/disable.js
 var cachedStatus = null;
 function defaultResolveTransformers() {
-  const sharedDir = join10(homedir6(), ".hivemind", "embed-deps");
+  const sharedDir = join11(homedir7(), ".hivemind", "embed-deps");
   try {
     createRequire(pathToFileURL(`${sharedDir}/`).href).resolve("@huggingface/transformers");
     return;
@@ -68417,7 +68445,7 @@ function normalizeSessionMessage(path2, message) {
   return normalizeContent(path2, raw);
 }
 function resolveEmbedDaemonPath() {
-  return join11(dirname5(fileURLToPath(import.meta.url)), "..", "embeddings", "embed-daemon.js");
+  return join12(dirname5(fileURLToPath(import.meta.url)), "..", "embeddings", "embed-daemon.js");
 }
 function joinSessionMessages(path2, messages) {
   return messages.map((message) => normalizeSessionMessage(path2, message)).join("\n");
@@ -69921,7 +69949,7 @@ function stripQuotes(val) {
 }
 
 // node_modules/yargs-parser/build/lib/index.js
-import { readFileSync as readFileSync6 } from "fs";
+import { readFileSync as readFileSync7 } from "fs";
 import { createRequire as createRequire2 } from "node:module";
 var _a3;
 var _b;
@@ -69948,7 +69976,7 @@ var parser = new YargsParser({
     if (typeof require2 !== "undefined") {
       return require2(path2);
     } else if (path2.match(/\.json$/)) {
-      return JSON.parse(readFileSync6(path2, "utf8"));
+      return JSON.parse(readFileSync7(path2, "utf8"));
     } else {
       throw Error("only .json config files are supported in ESM");
     }
@@ -69968,11 +69996,11 @@ var lib_default = yargsParser;
 
 // dist/src/shell/grep-interceptor.js
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname6, join as join12 } from "node:path";
+import { dirname as dirname6, join as join13 } from "node:path";
 var SEMANTIC_SEARCH_ENABLED = process.env.HIVEMIND_SEMANTIC_SEARCH !== "false" && !embeddingsDisabled();
 var SEMANTIC_EMBED_TIMEOUT_MS = Number(process.env.HIVEMIND_SEMANTIC_EMBED_TIMEOUT_MS ?? "500");
 function resolveGrepEmbedDaemonPath() {
-  return join12(dirname6(fileURLToPath2(import.meta.url)), "..", "embeddings", "embed-daemon.js");
+  return join13(dirname6(fileURLToPath2(import.meta.url)), "..", "embeddings", "embed-daemon.js");
 }
 var sharedGrepEmbedClient = null;
 function getGrepEmbedClient() {

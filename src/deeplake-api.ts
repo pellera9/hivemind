@@ -4,6 +4,7 @@ import { sqlStr, sqlIdent } from "./utils/sql.js";
 import { SUMMARY_EMBEDDING_COL, MESSAGE_EMBEDDING_COL } from "./embeddings/columns.js";
 import { deeplakeClientHeader } from "./utils/client-header.js";
 import { enqueueNotification } from "./notifications/queue.js";
+import { loadCredentials } from "./commands/auth-creds.js";
 
 // index-marker-store touches node:fs. Load it lazily so bundlers that split
 // chunks (e.g. the openclaw plugin build) can put fs operations in a separate
@@ -68,11 +69,31 @@ function maybeSignalBalanceExhausted(status: number, bodyText: string): void {
     id: "balance-exhausted",
     severity: "warn",
     title: "Hivemind credits exhausted — top up to keep capturing",
-    body: "Sessions are not being saved and memory recall is returning empty. Top up at https://app.deeplake.ai/billing to restore capture and recall.",
+    body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero", date },
   }).catch((e: unknown) => {
     log(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
   });
+}
+
+/**
+ * Construct the org-scoped billing URL from persisted credentials. The
+ * canonical shape is `https://deeplake.ai/{orgName}/workspace/{workspaceId}/billing`
+ * — the org and workspace come from `~/.deeplake/credentials.json`. Falls
+ * back to the bare host when creds are missing or malformed (better to
+ * point at *something* than at a URL with literal `undefined` segments).
+ */
+function billingUrl(): string {
+  try {
+    const c = loadCredentials();
+    if (c?.orgName && c?.workspaceId) {
+      // URI-encode in case anyone has an org/workspace name with reserved chars.
+      // workspaceId is typically a UUID; orgName is typically a slug, but
+      // encodeURIComponent is a cheap guard against future weirdness.
+      return `https://deeplake.ai/${encodeURIComponent(c.orgName)}/workspace/${encodeURIComponent(c.workspaceId)}/billing`;
+    }
+  } catch { /* fall through to default */ }
+  return "https://deeplake.ai";
 }
 
 // ── Retry & concurrency primitives ──────────────────────────────────────────
