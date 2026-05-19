@@ -108,6 +108,38 @@ describe("rules registry — edge cases", () => {
     });
     expect(out).toHaveLength(0);
   });
+
+  it("evaluateRules returns empty array when no rules are registered (for-loop branch)", () => {
+    // Coverage gap: without this case the for-loop in evaluateRules never
+    // exercises the empty-RULES branch — when _resetRulesForTest leaves the
+    // array empty, the loop body should never run and the function should
+    // return [].
+    const out = evaluateRules("session_start", {
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("evaluateRules pushes truthy results onto the output array (covered branch)", () => {
+    // Coverage gap: the `if (result) out.push(result)` truthy branch on
+    // registry.ts:30. Other tests register rules that return null; this
+    // one returns a real Notification so the push runs.
+    const firingRule: Rule = {
+      id: "always-fires",
+      trigger: "session_start",
+      evaluate: () => ({ id: "always-fires", title: "T", body: "B", dedupKey: { v: 1 } }),
+    };
+    registerRule(firingRule);
+    const out = evaluateRules("session_start", {
+      agent: "claude-code",
+      creds: null,
+      state: { shown: {} },
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("always-fires");
+  });
 });
 
 // ---------------------------------------------------------------------------
