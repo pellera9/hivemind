@@ -61,7 +61,13 @@ describe("pi extension — embedding wiring", () => {
     // We require the inline helper to call isPidAlive but never SIGTERM
     // the daemon — the only allowed kill is the liveness probe `kill(pid, 0)`.
     expect(PI_SRC).toContain("isPidAlive");
-    expect(PI_SRC).not.toMatch(/process\.kill\([^,]+,\s*["']?SIGTERM/);
+    // Allowed: `process.kill(pid, 0)` — liveness probe used inside
+    // isPidAlive(). Any OTHER process.kill(...) is forbidden, including
+    // the bare `process.kill(pid)` form which Node treats as SIGTERM by
+    // default (codeRabbit hardening, PR #183 review).
+    expect(PI_SRC).toMatch(/process\.kill\(\s*pid\s*,\s*0\s*\)/);
+    const withoutLivenessProbe = PI_SRC.replace(/process\.kill\(\s*pid\s*,\s*0\s*\)/g, "");
+    expect(withoutLivenessProbe).not.toMatch(/process\.kill\(/);
   });
 
   it("treats an empty pidfile as 'writer in progress' (codex P1 #1)", () => {
