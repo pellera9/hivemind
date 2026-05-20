@@ -179,16 +179,43 @@ describe("runRulesCommand — list", () => {
     };
   }
 
-  it("renders active rules by default with id prefix and version", async () => {
+  it("renders active rules by default with full rule_id (so copy-paste into edit/done works)", async () => {
     queryMock.mockResolvedValueOnce([fakeRow()]);
     await runRulesCommand(["list"]);
     // List exercises a single SELECT (no per-rule SELECTs)
     expect(queryMock).toHaveBeenCalledTimes(1);
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT .* FROM "hivemind_rules" ORDER BY version DESC/);
     expect(logged.some(l => l.includes("[active]"))).toBe(true);
-    expect(logged.some(l => l.includes("rule-aaa"))).toBe(true);
+    // The FULL rule_id must appear — edit/done do an exact-match SELECT,
+    // so a truncated id displayed here would fail to round-trip. Codex
+    // review on S2 surfaced this regression risk; lock it in.
+    expect(logged.some(l => l.includes("rule-aaaa-bbbb"))).toBe(true);
     expect(logged.some(l => l.includes("v1"))).toBe(true);
     expect(logged.some(l => l.includes("no DROP TABLE"))).toBe(true);
+  });
+
+  it("listed rule_id round-trips into edit (no truncation regression)", async () => {
+    // E2E-style: list a row, capture the displayed id, then call edit
+    // with that exact string. Both subcommands must agree on the id
+    // shape — otherwise users get "Rule not found" when copy-pasting.
+    const row = fakeRow({ rule_id: "11111111-2222-3333-4444-555555555555" });
+    queryMock.mockResolvedValueOnce([row]);    // list SELECT
+    queryMock.mockResolvedValueOnce([row]);    // edit's getRuleLatest SELECT
+    queryMock.mockResolvedValueOnce([]);       // edit's INSERT
+
+    await runRulesCommand(["list"]);
+    // Pull the id out of the rendered row using a UUID regex — this is
+    // exactly what a user would do by eye / clipboard.
+    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+    const displayedRow = logged.find(l => l.startsWith("[active]"));
+    const displayedId = displayedRow?.match(uuidRe)?.[0];
+    expect(displayedId).toBe(row.rule_id);
+
+    // Use the displayed id in edit and verify the SELECT lookup matches.
+    await runRulesCommand(["edit", displayedId!, "tightened"]);
+    const editSelectSql = queryMock.mock.calls[1][0];
+    expect(editSelectSql).toContain(`rule_id = '${row.rule_id}'`);
+    expect(erred).toEqual([]);
   });
 
   it("prints empty-state message when no rules match", async () => {

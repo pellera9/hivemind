@@ -130,9 +130,15 @@ function stripKnownFlags(args: string[]): string[] {
 }
 
 function formatListRow(r: RuleRow): string {
+  // Print the full rule_id (36-char UUID) so users can copy-paste it
+  // straight into `hivemind rules edit <id>` / `done <id>`. An earlier
+  // version truncated to 8 chars for readability, but edit/done do an
+  // exact-match SELECT on rule_id, so a truncated copy failed with
+  // "Rule not found". Codex review on S2 surfaced this — see commit
+  // log for context. Future ergonomics (prefix matching, short
+  // aliases) tracked as a v1.1 polish item.
   const tag = r.status === "done" ? "[done]" : "[active]";
-  const id8 = r.rule_id.slice(0, 8);
-  return `${tag} ${id8}  v${r.version}  ${r.assigned_by}  ${r.text}`;
+  return `${tag} ${r.rule_id}  v${r.version}  ${r.assigned_by}  ${r.text}`;
 }
 
 export async function runRulesCommand(args: string[]): Promise<void> {
