@@ -43,7 +43,17 @@ One command, all your agents:
 npm install -g @deeplake/hivemind && hivemind install
 ```
 
-The installer detects every supported assistant on your machine (table below), wires up the hooks, and opens a browser once for login. Restart them after install.
+The installer detects every supported assistant on your machine (table below), wires up the hooks, and shows a one-line consent prompt before opening a browser for sign-in. Restart your assistants after install.
+
+**Headless / CI installs** — pass an API token instead of using the browser flow:
+
+```bash
+DEEPLAKE_API_TOKEN=<your-token> hivemind install
+# or
+hivemind install --token <your-token>
+```
+
+Get a token from your account settings on https://deeplake.ai. With no token in a non-interactive shell, the install completes with hooks but skips sign-in; run `hivemind login` later to enable shared memory.
 
 **Install for a specific assistant only:**
 

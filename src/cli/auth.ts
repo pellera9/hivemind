@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { HOME, log, warn } from "./util.js";
-import { login, loadCredentials, listOrgs } from "../commands/auth.js";
+import { login, loadCredentials, listOrgs, saveCredentialsFromToken } from "../commands/auth.js";
+
+const DEFAULT_API_URL = "https://api.deeplake.ai";
+
+function resolveApiUrl(): string {
+  return process.env.HIVEMIND_API_URL ?? process.env.DEEPLAKE_API_URL ?? DEFAULT_API_URL;
+}
 
 const CREDS_PATH = join(HOME, ".deeplake", "credentials.json");
 
@@ -16,14 +22,35 @@ export async function ensureLoggedIn(): Promise<boolean> {
   log("No Deeplake credentials found. Starting login...");
 
   try {
-    const apiUrl = process.env.HIVEMIND_API_URL ?? process.env.DEEPLAKE_API_URL ?? "https://api.deeplake.ai";
-    await login(apiUrl);
+    await login(resolveApiUrl());
   } catch (err) {
     warn(`Login failed: ${(err as Error).message}`);
     return false;
   }
 
   return isLoggedIn();
+}
+
+// Sign in using a long-lived API token from --token, DEEPLAKE_API_TOKEN, or
+// HIVEMIND_TOKEN. Returns false when no token is present so callers can
+// distinguish "no token attempted" from "token attempted and failed". A
+// failed token validation is warned-and-continued, never thrown — install
+// must not break on auth.
+export async function loginWithProvidedToken(flagToken?: string): Promise<boolean> {
+  const token = flagToken
+    ?? process.env.DEEPLAKE_API_TOKEN
+    ?? process.env.HIVEMIND_TOKEN;
+  if (!token) return false;
+
+  try {
+    await saveCredentialsFromToken(token, resolveApiUrl(), { skipTokenMint: true });
+    const source = flagToken ? "--token flag" : "DEEPLAKE_API_TOKEN";
+    log(`Signed in via ${source}.`);
+    return true;
+  } catch (err) {
+    warn(`Token authentication failed: ${(err as Error).message}. Continuing install.`);
+    return false;
+  }
 }
 
 export async function maybeShowOrgChoice(): Promise<void> {

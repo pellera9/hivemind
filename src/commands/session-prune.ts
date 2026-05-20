@@ -14,7 +14,7 @@
 import { loadConfig, type Config } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlStr } from "../utils/sql.js";
-import { createInterface } from "node:readline";
+import { confirm } from "../cli/util.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,16 +53,6 @@ function parseArgs(argv: string[]): {
   }
 
   return { before, sessionId, all, yes };
-}
-
-function confirm(message: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  return new Promise(resolve => {
-    rl.question(`${message} [y/N] `, answer => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === "y");
-    });
-  });
 }
 
 /**
@@ -218,7 +208,7 @@ export async function sessionPrune(argv: string[]): Promise<void> {
 
   // Confirm unless --yes
   if (!yes) {
-    const ok = await confirm("Proceed with deletion?");
+    const ok = await confirm("Proceed with deletion?", false);
     if (!ok) {
       console.log("Aborted.");
       return;

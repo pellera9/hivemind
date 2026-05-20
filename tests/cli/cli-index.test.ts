@@ -61,20 +61,24 @@ vi.mock("../../src/cli/install-pi.js", () => ({
   upsertHivemindBlock: () => "",
   stripHivemindBlock: (s: string) => s,
 }));
+const loginWithProvidedTokenMock = vi.fn();
 vi.mock("../../src/cli/auth.js", () => ({
   ensureLoggedIn: (...a: unknown[]) => ensureLoggedInMock(...a),
   isLoggedIn: (...a: unknown[]) => isLoggedInMock(...a),
+  loginWithProvidedToken: (...a: unknown[]) => loginWithProvidedTokenMock(...a),
   maybeShowOrgChoice: (...a: unknown[]) => maybeShowOrgChoiceMock(...a),
 }));
 vi.mock("../../src/commands/auth-login.js", () => ({
   runAuthCommand: (...a: unknown[]) => runAuthCommandMock(...a),
 }));
+const confirmMock = vi.fn();
 vi.mock("../../src/cli/util.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/cli/util.js")>();
   return {
     ...actual,
     detectPlatforms: (...a: unknown[]) => detectPlatformsMock(...a),
     allPlatformIds: (...a: unknown[]) => allPlatformIdsMock(...a),
+    confirm: (...a: unknown[]) => confirmMock(...a),
   };
 });
 vi.mock("../../src/cli/version.js", () => ({
@@ -102,7 +106,11 @@ beforeEach(() => {
   for (const fn of Object.values(installs)) fn.mockReset();
   ensureLoggedInMock.mockReset().mockResolvedValue(true);
   isLoggedInMock.mockReset().mockReturnValue(true);
+  loginWithProvidedTokenMock.mockReset().mockResolvedValue(false);
+  confirmMock.mockReset().mockResolvedValue(true);
   maybeShowOrgChoiceMock.mockReset().mockResolvedValue(undefined);
+  delete process.env.DEEPLAKE_API_TOKEN;
+  delete process.env.HIVEMIND_TOKEN;
   runAuthCommandMock.mockReset().mockResolvedValue(undefined);
   detectPlatformsMock.mockReset().mockReturnValue([]);
   allPlatformIdsMock.mockReset().mockReturnValue(["claude", "codex", "claw", "cursor", "hermes", "pi"]);
@@ -189,20 +197,22 @@ describe("hivemind install", () => {
     }
   });
 
-  it("with detected platforms: ensures login, runs each installer once, then maybeShowOrgChoice", async () => {
+  it("with detected platforms: ensures login (TTY consent → yes), runs each installer once, then maybeShowOrgChoice", async () => {
     detectPlatformsMock.mockReturnValue([
       { id: "claude", markerDir: "/x/.claude" },
       { id: "codex",  markerDir: "/x/.codex" },
     ]);
     isLoggedInMock.mockReturnValue(false);
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    confirmMock.mockResolvedValue(true);
     ensureLoggedInMock.mockResolvedValue(true);
 
     await runCli(["install"]);
 
+    expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(ensureLoggedInMock).toHaveBeenCalledTimes(1);
     expect(installs.installClaude).toHaveBeenCalledTimes(1);
     expect(installs.installCodex).toHaveBeenCalledTimes(1);
-    // No other platforms triggered.
     expect(installs.installCursor).not.toHaveBeenCalled();
     expect(installs.installHermes).not.toHaveBeenCalled();
     expect(installs.installPi).not.toHaveBeenCalled();
@@ -219,15 +229,18 @@ describe("hivemind install", () => {
     expect(installs.installClaude).toHaveBeenCalledTimes(1);
   });
 
-  it("exits non-zero when login does not complete", async () => {
+  it("continues install (exit 0) when login does not complete — auth is no longer a blocker", async () => {
     detectPlatformsMock.mockReturnValue([{ id: "claude", markerDir: "/x/.claude" }]);
     isLoggedInMock.mockReturnValue(false);
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    confirmMock.mockResolvedValue(true);
     ensureLoggedInMock.mockResolvedValue(false);
 
     await runCli(["install"]);
 
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(installs.installClaude).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(installs.installClaude).toHaveBeenCalledTimes(1);
+    expect(stderrText()).toContain("Login did not complete");
   });
 
   it("--only <list> overrides detection and validates platform names", async () => {

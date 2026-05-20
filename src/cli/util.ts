@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, cpSync, symlinkSync
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 
 export const HOME = homedir();
 
@@ -109,4 +110,21 @@ export function log(msg: string): void {
 
 export function warn(msg: string): void {
   process.stderr.write(msg + "\n");
+}
+
+// Interactive y/n prompt. Renders the hint based on the default so a bare
+// Enter is unambiguous. Writes the question to stderr (same channel as warn)
+// so log piping stays clean. Callers must check process.stdin.isTTY first —
+// readline on closed stdin would hang the process.
+export function confirm(message: string, defaultYes = true): Promise<boolean> {
+  const hint = defaultYes ? "[Y/n]" : "[y/N]";
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise(resolve => {
+    rl.question(`${message} ${hint} `, answer => {
+      rl.close();
+      const a = answer.trim().toLowerCase();
+      if (a === "") resolve(defaultYes);
+      else resolve(a === "y" || a === "yes");
+    });
+  });
 }
