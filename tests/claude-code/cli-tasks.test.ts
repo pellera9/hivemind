@@ -419,6 +419,24 @@ describe("runTasksCommand — progress", () => {
     expect(erred.some(l => l.includes("Invalid --value"))).toBe(true);
   });
 
+  it("rejects fractional --value (events table is BIGINT) — codex P2 regression guard", async () => {
+    // Schema stores `value BIGINT NOT NULL DEFAULT 0`, so fractional
+    // deltas would fail at the backend INSERT with a cryptic SQL
+    // error. We reject up-front with a clear message. This pins the
+    // v1 integer contract so a future "let users emit 0.5" change
+    // has to consciously remove this test (and switch the column to
+    // DOUBLE PRECISION).
+    await expectExit(1, () => runTasksCommand(["progress", "task-x", "k_x", "--value", "0.5"]));
+    expect(erred.some(l => l.includes("Invalid --value") && l.includes("integer"))).toBe(true);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects --value 0 (zero events carry no signal)", async () => {
+    await expectExit(1, () => runTasksCommand(["progress", "task-x", "k_x", "--value", "0"]));
+    expect(erred.some(l => l.includes("Invalid --value: 0"))).toBe(true);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("exits 1 when the task does not exist", async () => {
     queryMock.mockResolvedValueOnce([]); // SELECT returns nothing
     await expectExit(1, () => runTasksCommand(["progress", "missing", "k_x", "--value", "1"]));
@@ -448,8 +466,26 @@ describe("runTasksCommand — report", () => {
     queryMock.mockResolvedValueOnce([]); // listTasks SELECT
     await runTasksCommand(["report"]);
     expect(logged.some(l => l.includes("(no active tasks to report on)"))).toBe(true);
-    // listTasks + nothing else
+    // listTasks only — empty-state short-circuits BEFORE the
+    // ensureTaskEventsTable call, so we save one round-trip too.
     expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(ensureTaskEventsTableMock).not.toHaveBeenCalled();
+  });
+
+  it("pre-ensures task_events at the top of report — codex P2 regression guard", async () => {
+    // Fresh install: listTasks returns one task with KPIs; aggregate
+    // SELECT would otherwise fail with "table does not exist" before
+    // the report could render anything. Pre-ensuring up front means
+    // a never-used-before events table doesn't crash report.
+    const KPI = {
+      kpi_id: "k_pr", name: "PRs merged", target: 5, unit: "count",
+      generated_by: "manual", generated_at: "2026-05-20T10:00:00Z",
+    };
+    queryMock.mockResolvedValueOnce([fakeRow({ kpis: JSON.stringify([KPI]) })]); // listTasks
+    queryMock.mockResolvedValueOnce([{ kpi_id: "k_pr", total: 0 }]);             // computeAllForTask
+    await runTasksCommand(["report"]);
+    expect(ensureTaskEventsTableMock).toHaveBeenCalledTimes(1);
+    expect(ensureTaskEventsTableMock).toHaveBeenCalledWith("hivemind_task_events");
   });
 
   it("per-task: aggregates events via SUM and renders current/target per KPI", async () => {
@@ -516,11 +552,16 @@ describe("runTasksCommand — report", () => {
     expect(erred.some(l => l.includes("Task not found: ghost-task"))).toBe(true);
   });
 
-  it("task with no KPIs prints the 'T4 will plug LLM generation' hint", async () => {
+  it("task with no KPIs prints the 'T4 will plug LLM generation' hint AND skips the aggregate query", async () => {
+    // The kpis.length===0 check now runs BEFORE computeAllForTask, so
+    // a task without KPIs costs ONLY the listTasks SELECT — no
+    // wasted aggregate call. Codex review on T5 surfaced the ordering.
     queryMock.mockResolvedValueOnce([fakeRow({ kpis: "[]" })]);    // listTasks
-    queryMock.mockResolvedValueOnce([]);                            // computeAllForTask
     await runTasksCommand(["report"]);
     expect(logged.some(l => l.includes("no KPIs defined yet"))).toBe(true);
+    // listTasks (1) — NO computeAllForTask. ensureTaskEventsTable was
+    // called separately on the mock (which doesn't count as a query).
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 });
 

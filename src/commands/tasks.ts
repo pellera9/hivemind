@@ -165,10 +165,14 @@ function parseLimit(args: string[]): number {
 }
 
 /**
- * Parse the --value flag for `tasks progress`. Required; finite (allows
- * negatives for corrections); rejects NaN / Infinity. Unlike --limit
- * this is NOT required to be a positive integer — float deltas are
- * legal (e.g. partial completion).
+ * Parse the --value flag for `tasks progress`. Required; must be a
+ * finite INTEGER (negative values allowed for corrections, zero NOT
+ * allowed because it carries no signal). The events table stores
+ * `value` as BIGINT, so fractional deltas would fail at the backend
+ * INSERT — we reject up-front with a clear error rather than letting
+ * the user discover via a cryptic SQL error. If fractional KPIs ever
+ * become a real use case, the schema change (BIGINT → DOUBLE PRECISION)
+ * is tracked as a v1.1 follow-up.
  */
 function parseValue(args: string[]): number {
   const idx = args.findIndex(a => a === "--value" || a.startsWith("--value="));
@@ -179,8 +183,13 @@ function parseValue(args: string[]): number {
   }
   const raw = args[idx].includes("=") ? args[idx].split("=", 2)[1] : args[idx + 1];
   const n = Number(raw);
-  if (!Number.isFinite(n)) {
-    console.error(`Invalid --value: ${raw}. Must be a finite number.`);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    console.error(`Invalid --value: ${raw}. Must be a finite integer (events store BIGINT).`);
+    process.exit(1);
+    throw new Error("unreachable");
+  }
+  if (n === 0) {
+    console.error("Invalid --value: 0. Use a non-zero integer (zero events carry no signal).");
     process.exit(1);
     throw new Error("unreachable");
   }
@@ -468,20 +477,30 @@ export async function runTasksCommand(args: string[]): Promise<void> {
       return;
     }
 
-    // Per-task: pull aggregated KPI totals in one round-trip via
-    // computeAllForTask, then render current/target/unit for each KPI
-    // defined on the task. KPIs with no events show 0/target.
+    // Ensure the events table exists before any aggregate query. On a
+    // fresh install nothing has created task_events yet (auto-extract
+    // and `tasks progress` lazy-create on first INSERT, but report is
+    // SELECT-only and would otherwise fail with "table does not
+    // exist" before the kpis-length check could short-circuit).
+    // Pre-ensure once at the top so the per-task SELECT loop never
+    // touches that branch. Codex review on T5 surfaced this.
+    await api.ensureTaskEventsTable(cfg.taskEventsTableName);
+
+    // Per-task: render KPI lines from the events stream. Tasks with
+    // no KPIs short-circuit BEFORE the aggregate query — saves a
+    // round-trip and surfaces the "T4 plugs LLM generation" hint
+    // even when the events table is brand-new.
     for (const task of tasksToReport) {
       console.log(formatListRow(task));
+      if (task.kpis.length === 0) {
+        console.log("    (no KPIs defined yet — T4 will plug LLM generation)");
+        continue;
+      }
       const totals = await computeAllForTask(
         api.query.bind(api),
         cfg.taskEventsTableName,
         task.task_id,
       );
-      if (task.kpis.length === 0) {
-        console.log("    (no KPIs defined yet — T4 will plug LLM generation)");
-        continue;
-      }
       for (const k of task.kpis) {
         const current = totals[k.kpi_id] ?? 0;
         console.log(`    - ${k.name}: ${current}/${k.target} ${k.unit}`);
