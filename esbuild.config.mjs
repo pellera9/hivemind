@@ -441,7 +441,19 @@ await build({
   platform: "node",
   format: "esm",
   outdir: "bundle",
-  external: ["node:*", "node-liblzma", "@mongodb-js/zstd"],
+  external: [
+    "node:*",
+    "node-liblzma",
+    "@mongodb-js/zstd",
+    // tree-sitter ships native .node prebuilds via prebuild-install. esbuild
+    // can't bundle .node files, and even if it could, native bindings have to
+    // be loaded from disk at runtime. The CLI resolves them from its sibling
+    // node_modules — same pattern as transformers/onnxruntime in the embed-
+    // daemon bundle. Imported via src/commands/graph.ts (codebase-graph
+    // Phase 1).
+    "tree-sitter",
+    "tree-sitter-typescript",
+  ],
   banner: { js: "#!/usr/bin/env node" },
 });
 chmodSync("bundle/cli.js", 0o755);

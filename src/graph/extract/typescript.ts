@@ -75,7 +75,20 @@ export function extractTypeScript(
   relativePath: string,
 ): FileExtraction {
   const parser = getTypescriptParser();
-  const tree = parser.parse(sourceCode) as { rootNode: TSNode };
+  // Use the callback-based parse API instead of `parser.parse(string)`.
+  // tree-sitter 0.21 throws "Invalid argument" on direct string input larger
+  // than ~32 KB; the callback path streams the source in chunks and handles
+  // any size. EMPIRICAL CONSTRAINT: each chunk RETURNED by the callback must
+  // also be < 32 KB (16384 is the largest power of two that's safely below
+  // the limit on tree-sitter 0.21). Sanity-check on this repo found 1 file
+  // at 37 KB hitting the original limit; 16 KB chunks parse it cleanly.
+  const CHUNK_BYTES = 16384;
+  const tree = (parser as unknown as {
+    parse(cb: (index: number) => string | null): { rootNode: TSNode };
+  }).parse((index: number) => {
+    if (index >= sourceCode.length) return null;
+    return sourceCode.slice(index, index + CHUNK_BYTES);
+  });
   const root = tree.rootNode;
 
   const result: FileExtraction = {
