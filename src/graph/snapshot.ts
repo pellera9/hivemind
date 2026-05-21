@@ -195,7 +195,8 @@ export function writeSnapshot(
     writeFileAtomic(latestCommitPath, `${commitSha}\n`);
   }
 
-  // .last-build.json — read by the Stop hook to gate auto-rebuilds.
+  // .last-build.json — read by the SessionEnd auto-build hook to gate
+  // auto-rebuilds (rate limit + HEAD-changed + threshold checks).
   // Best-effort: a write failure here doesn't roll back the snapshot.
   writeLastBuild(baseDir, {
     ts: Date.now(),

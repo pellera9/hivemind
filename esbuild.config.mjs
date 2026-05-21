@@ -17,9 +17,11 @@ const ccHooks = [
   { entry: "dist/src/hooks/plugin-cache-gc.js", out: "plugin-cache-gc" },
   { entry: "dist/src/hooks/wiki-worker.js", out: "wiki-worker" },
   { entry: "dist/src/skillify/skillify-worker.js", out: "skillify-worker" },
-  // codebase-graph Phase 1.5: auto-build the graph at Stop, gated on
-  // (a) 10-min rate limit, (b) HEAD changed since last build, (c) ≥1
+  // codebase-graph Phase 1.5: auto-build the graph at SessionEnd, gated
+  // on (a) 10-min rate limit, (b) HEAD changed since last build, (c) ≥1
   // source file diff. See src/hooks/graph-on-stop.ts.
+  // Filename keeps the "on-stop" suffix for backward-compat with prior
+  // builds; the hook itself is registered under SessionEnd, not Stop.
   { entry: "dist/src/hooks/graph-on-stop.js", out: "graph-on-stop" },
 ];
 

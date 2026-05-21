@@ -5,7 +5,8 @@
  *   ~/.hivemind/graphs/<repo-key>/.last-build.json
  *     { ts: epoch_ms, commit_sha: string | null, snapshot_sha256: string }
  *
- * Read by the Stop hook to gate auto-rebuilds on:
+ * Read by the SessionEnd auto-build hook (src/hooks/graph-on-stop.ts) to gate
+ * auto-rebuilds on:
  *   - rate limit (now - ts >= TICK_INTERVAL_MS)
  *   - new commit (HEAD != commit_sha)
  *   - source file diff (git diff --name-only ... -- '<src-globs>' | wc -l >= 1)

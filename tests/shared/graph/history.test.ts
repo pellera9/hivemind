@@ -115,13 +115,13 @@ describe("entryFromSnapshot — pure converter", () => {
       nodes: [{ id: "x:a:function", label: "a", kind: "function", source_file: "x", source_location: "L1", language: "typescript", exported: false }],
       links: [],
     };
-    const e = entryFromSnapshot(snap, "sha256-fingerprint", "stop-hook");
+    const e = entryFromSnapshot(snap, "sha256-fingerprint", "session-end");
     expect(e.ts).toBe("2026-01-01T12:34:56Z");
     expect(e.commit_sha).toBe("abc");
     expect(e.snapshot_sha256).toBe("sha256-fingerprint");
     expect(e.node_count).toBe(1);
     expect(e.edge_count).toBe(0);
-    expect(e.trigger).toBe("stop-hook");
+    expect(e.trigger).toBe("session-end");
   });
 });
 

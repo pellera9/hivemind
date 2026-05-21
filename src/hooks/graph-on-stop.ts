@@ -194,7 +194,7 @@ export function main(): void {
   if (!decision.fire) return;
 
   try {
-    runBuildCommand(["--trigger", "stop-hook"]);
+    runBuildCommand(["--trigger", "session-end"]);
   } catch (err) {
     logToFile(ctx.cwd, `build threw: ${err instanceof Error ? err.message : String(err)}`);
   }

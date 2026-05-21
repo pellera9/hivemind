@@ -383,10 +383,10 @@ function parseBuildArgs(args: string[]): BuildOptions {
       i += 1;
     } else if (a === "--trigger" && i + 1 < args.length) {
       const v = args[i + 1]!;
-      if (v === "manual" || v === "stop-hook" || v === "post-commit" || v === "unknown") {
+      if (v === "manual" || v === "session-end" || v === "post-commit" || v === "unknown") {
         trigger = v;
       } else {
-        console.error(`hivemind graph build: --trigger must be one of manual|stop-hook|post-commit|unknown (got '${v}')`);
+        console.error(`hivemind graph build: --trigger must be one of manual|session-end|post-commit|unknown (got '${v}')`);
         process.exit(2);
       }
       i += 1;
