@@ -202,6 +202,8 @@ export function writeSnapshot(
     ts: Date.now(),
     commit_sha: commitSha,
     snapshot_sha256: sha256,
+    node_count: snapshot.nodes.length,
+    edge_count: snapshot.links.length,
   });
 
   // history.jsonl — append a one-line audit record. Best-effort; failure

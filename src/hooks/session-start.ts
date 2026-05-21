@@ -22,6 +22,7 @@ import { autoPullSkills } from "../skillify/auto-pull.js";
 import { renderSkillifyCommands } from "../cli/skillify-spec.js";
 import { countLocalManifestEntries } from "../skillify/local-manifest.js";
 import { maybeAutoMineLocal } from "../skillify/spawn-mine-local-worker.js";
+import { graphContextLine } from "../graph/session-context.js";
 const log = (msg: string) => _log("session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -223,9 +224,18 @@ async function main(): Promise<void> {
   const localMinedNote = localMined > 0
     ? `\n\n${localMined} local skill${localMined === 1 ? "" : "s"} from past 'hivemind skillify mine-local' run(s) live in ~/.claude/skills/. Run 'hivemind login' to start sharing new mining results with your team.`
     : "";
-  const additionalContext = creds?.token
-    ? `${resolvedContext}\n\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${updateNotice}`
-    : `${resolvedContext}\n\n⚠️ Not logged in to Deeplake. Memory search will not work. Ask the user to run /hivemind:login to authenticate.${localMinedNote}${updateNotice}`;
+  // Local code graph context (Phase 3 v1.1). Cheap: reads ~/.hivemind/...
+  // /.last-build.json (small file populated by writeSnapshot) — never opens
+  // the ~1 MB snapshot. Returns null when no graph exists for this repo, in
+  // which case we add nothing (avoids a misleading "graph: 0 nodes" line
+  // for users who've never run a build).
+  const graphLine = graphContextLine(input.cwd ?? process.cwd());
+  const graphNote = graphLine ?? "";
+
+  const baseAuth = creds?.token
+    ? `\n\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${updateNotice}`
+    : `\n\n⚠️ Not logged in to Deeplake. Memory search will not work. Ask the user to run /hivemind:login to authenticate.${localMinedNote}${updateNotice}`;
+  const additionalContext = `${resolvedContext}${baseAuth}${graphNote}`;
 
   console.log(JSON.stringify({
     hookSpecificOutput: {

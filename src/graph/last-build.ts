@@ -25,6 +25,16 @@ export interface LastBuildState {
   commit_sha: string | null;
   /** Content fingerprint of the snapshot that was written (NOT including observation). */
   snapshot_sha256: string;
+  /**
+   * Optional: snapshot.nodes.length captured at write time. Read by
+   * src/graph/session-context.ts to compose the SessionStart inject line
+   * WITHOUT having to parse the full ~1 MB snapshot on every session. Absent
+   * on files written by builds older than this field; readers treat
+   * undefined as "unknown".
+   */
+  node_count?: number;
+  /** Optional: snapshot.links.length captured at write time. See node_count. */
+  edge_count?: number;
 }
 
 export function lastBuildPath(baseDir: string): string {
@@ -72,5 +82,13 @@ export function readLastBuild(baseDir: string): LastBuildState | null {
   if (typeof o.ts !== "number") return null;
   if (o.commit_sha !== null && typeof o.commit_sha !== "string") return null;
   if (typeof o.snapshot_sha256 !== "string") return null;
-  return { ts: o.ts, commit_sha: o.commit_sha, snapshot_sha256: o.snapshot_sha256 };
+  const out: LastBuildState = { ts: o.ts, commit_sha: o.commit_sha, snapshot_sha256: o.snapshot_sha256 };
+  // Optional counts: accept finite non-negative numbers, drop anything else.
+  if (typeof o.node_count === "number" && Number.isFinite(o.node_count) && o.node_count >= 0) {
+    out.node_count = o.node_count;
+  }
+  if (typeof o.edge_count === "number" && Number.isFinite(o.edge_count) && o.edge_count >= 0) {
+    out.edge_count = o.edge_count;
+  }
+  return out;
 }

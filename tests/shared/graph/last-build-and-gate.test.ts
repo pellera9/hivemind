@@ -49,6 +49,47 @@ describe("last-build state I/O", () => {
     writeFileSync(lastBuildPath(baseDir), JSON.stringify({ ts: 1, commit_sha: 123, snapshot_sha256: "x" }));
     expect(readLastBuild(baseDir)).toBeNull();
   });
+
+  it("preserves node_count and edge_count when present", () => {
+    const state = {
+      ts: 1, commit_sha: "abc", snapshot_sha256: "x",
+      node_count: 2544, edge_count: 2851,
+    };
+    writeLastBuild(baseDir, state);
+    expect(readLastBuild(baseDir)).toEqual(state);
+  });
+
+  it("omits node_count/edge_count when not in the file (backward compat)", () => {
+    // A file written before the optional fields existed: shape must still
+    // parse, just without the new fields. session-context.ts treats absent
+    // counts as "?".
+    mkdirSync(baseDir, { recursive: true });
+    writeFileSync(
+      lastBuildPath(baseDir),
+      JSON.stringify({ ts: 1, commit_sha: "abc", snapshot_sha256: "x" }),
+    );
+    const out = readLastBuild(baseDir);
+    expect(out).not.toBeNull();
+    expect(out!.node_count).toBeUndefined();
+    expect(out!.edge_count).toBeUndefined();
+  });
+
+  it("drops node_count/edge_count when of wrong type (does NOT reject the file)", () => {
+    // Defensive: a corrupted optional field shouldn't blow away a still-valid
+    // last-build record. We just drop the bad field and continue.
+    mkdirSync(baseDir, { recursive: true });
+    writeFileSync(
+      lastBuildPath(baseDir),
+      JSON.stringify({
+        ts: 1, commit_sha: "abc", snapshot_sha256: "x",
+        node_count: "not-a-number", edge_count: -5,
+      }),
+    );
+    const out = readLastBuild(baseDir);
+    expect(out).not.toBeNull();
+    expect(out!.node_count).toBeUndefined();
+    expect(out!.edge_count).toBeUndefined();
+  });
 });
 
 describe("decideGate — Stop hook auto-build gates", () => {
