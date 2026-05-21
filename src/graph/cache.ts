@@ -110,7 +110,17 @@ export function readCache(
   // parse_error to the caller's path. The same content can sit at multiple
   // paths; we mutate the returned shape rather than reusing the cached
   // strings so callers always see the current relativePath.
-  return rewriteSourceFile(cached, relativePath);
+  //
+  // Wrapped in try/catch so a corrupt entry whose items have non-string
+  // id/source/target fields falls through to re-extraction (cache miss)
+  // instead of bubbling up as an error that the build loop interprets as
+  // "skip this file" — the FileExtraction itself is presumably extractable;
+  // only the cached COPY is corrupt.
+  try {
+    return rewriteSourceFile(cached, relativePath);
+  } catch {
+    return null;
+  }
 }
 
 /**

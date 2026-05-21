@@ -167,6 +167,31 @@ describe("cache — read/write roundtrip", () => {
     expect(readCache(baseDir, sha, "src/foo.ts")).toBeNull();
   });
 
+  it("returns null when array items have non-string id/source/target (codex P1 fix)", () => {
+    // The shape passes the array-typeof check but per-item fields are wrong
+    // (numbers instead of strings). Without the try/catch in readCache,
+    // rewriteSourceFile throws when calling .startsWith on a number → the
+    // build loop interprets that as "skip this file" instead of cache-miss.
+    const sha = "deadbeef";
+    const path = cachePath(baseDir, sha);
+    require("node:fs").mkdirSync(cacheDir(baseDir), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: CACHE_SCHEMA_VERSION,
+        content_sha256: sha,
+        extraction: {
+          source_file: "src/foo.ts",
+          language: "typescript",
+          nodes: [{ id: 1, source_file: "src/foo.ts" }],
+          edges: [{ source: null, target: undefined }],
+          parse_errors: [],
+        },
+      }),
+    );
+    expect(readCache(baseDir, sha, "src/foo.ts")).toBeNull();
+  });
+
   it("writeCache uses atomic temp+rename (no leftover .tmp.* on success)", () => {
     const sha = "deadbeef";
     const ex = makeExtraction("src/foo.ts");
