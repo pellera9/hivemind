@@ -65,7 +65,8 @@ describe("git-hook-install — install/uninstall lifecycle", () => {
     expect(content).toContain(HOOK_BEGIN_MARKER);
     expect(content).toContain(HOOK_END_MARKER);
     expect(content).toContain("#!/bin/sh");
-    expect(content).toContain("hivemind graph build --trigger post-commit");
+    // Hook embeds an absolute path to hivemind in single quotes — codex P1 fix
+    expect(content).toMatch(/'\S+' graph build --trigger post-commit/);
     // executable bit on POSIX; on Windows this is moot but mode is still set
     const mode = statSync(r.path).mode & 0o777;
     expect(mode & 0o100).toBe(0o100);
@@ -118,7 +119,7 @@ describe("git-hook-install — install/uninstall lifecycle", () => {
     const path = postCommitHookPath(dir)!;
     // Write a hook where our block is sandwiched between user lines.
     const before = "#!/bin/sh\necho 'user prelude'\n";
-    const ours = buildHookFile().split("\n").slice(1).join("\n"); // drop the shebang
+    const ours = buildHookFile("/usr/local/bin/hivemind").split("\n").slice(1).join("\n"); // drop the shebang
     const after = "\necho 'user postlude'\n";
     writeFileSync(path, before + ours + after);
     const r = uninstallPostCommitHook(dir);
@@ -166,10 +167,72 @@ describe("git-hook-install — install/uninstall lifecycle", () => {
 
 describe("git-hook-install — helpers", () => {
   it("containsOurMarkers true when both markers present", () => {
-    expect(containsOurMarkers(buildHookFile())).toBe(true);
+    expect(containsOurMarkers(buildHookFile("/usr/local/bin/hivemind"))).toBe(true);
   });
   it("containsOurMarkers false when only one marker present", () => {
     expect(containsOurMarkers("#!/bin/sh\n" + HOOK_BEGIN_MARKER + "\n")).toBe(false);
     expect(containsOurMarkers("#!/bin/sh\n" + HOOK_END_MARKER + "\n")).toBe(false);
+  });
+  it("buildHookFile embeds the resolved hivemind path", () => {
+    const body = buildHookFile("/opt/hivemind/bin/hivemind");
+    expect(body).toContain("'/opt/hivemind/bin/hivemind' graph build --trigger post-commit");
+  });
+  it("buildHookFile single-quotes a path containing spaces", () => {
+    const body = buildHookFile("/Users/Mario Rossi/bin/hivemind");
+    // Shell single-quote wrapping
+    expect(body).toContain("'/Users/Mario Rossi/bin/hivemind'");
+  });
+  it("buildHookFile includes mkdir -p safety line (codex P1 fix)", () => {
+    const body = buildHookFile("/usr/local/bin/hivemind");
+    expect(body).toContain('mkdir -p "$HOME/.hivemind"');
+  });
+});
+
+describe("git-hook-install — codex P1 followups", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "hook-p1-"));
+    initGitRepo(dir);
+  });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("honors core.hooksPath when set (codex P1)", () => {
+    const customHooks = join(dir, "custom-hooks");
+    mkdirSync(customHooks, { recursive: true });
+    execSync(`git config core.hooksPath "${customHooks}"`, { cwd: dir });
+    const resolved = gitHooksDir(dir);
+    expect(resolved).toBe(customHooks);
+    // postCommitHookPath should follow
+    expect(postCommitHookPath(dir)).toBe(join(customHooks, "post-commit"));
+  });
+
+  it("strips ONLY our block, preserves user blank lines + heredoc-like content (codex P1)", () => {
+    const path = postCommitHookPath(dir)!;
+    // User content with intentional blank lines and a heredoc
+    const userBefore = [
+      "#!/bin/sh",
+      "",
+      "",  // intentional triple blank line user might rely on
+      "cat <<'EOF'",
+      "line1",
+      "",
+      "line3 with blank above",
+      "EOF",
+      "",
+    ].join("\n");
+    const ours = [
+      HOOK_BEGIN_MARKER,
+      "mkdir -p \"$HOME/.hivemind\" 2>/dev/null || true",
+      "nohup '/usr/bin/hivemind' graph build --trigger post-commit &",
+      HOOK_END_MARKER,
+    ].join("\n");
+    const userAfter = "\n\necho after\n";
+    writeFileSync(path, userBefore + ours + userAfter);
+    const r = uninstallPostCommitHook(dir);
+    expect(r.kind).toBe("removed");
+    if (r.kind === "removed") expect(r.wholeFileDeleted).toBe(false);
+    const content = readFileSync(path, "utf8");
+    // User content preserved byte-for-byte except the marker block:
+    expect(content).toBe(userBefore + userAfter);
   });
 });

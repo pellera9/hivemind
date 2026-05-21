@@ -20,14 +20,29 @@ import { execFileSync } from "node:child_process";
 export const HOOK_BEGIN_MARKER = "# HIVEMIND_GRAPH_HOOK_BEGIN — managed by `hivemind graph init`";
 export const HOOK_END_MARKER = "# HIVEMIND_GRAPH_HOOK_END";
 
-/** Lines we write between the markers. */
-const HOOK_BODY = [
-  "# Async-detached so commits never wait. Threshold-gate + cache make",
-  "# typical re-runs ~85ms. Logs go to ~/.hivemind/graphs/<key>/.post-commit.log",
-  'nohup hivemind graph build --trigger post-commit >> "$HOME/.hivemind/post-commit.log" 2>&1 &',
-];
-
 const SHEBANG = "#!/bin/sh";
+
+/**
+ * Build the hook body. `hivemindPath` is the absolute path to the hivemind
+ * binary resolved at install time — captured so the hook keeps working
+ * even when the user's PATH at commit time differs (GUI git clients like
+ * GitHub Desktop / Sourcetree commonly run with a reduced PATH).
+ */
+function hookBodyLines(hivemindPath: string): string[] {
+  return [
+    "# Async-detached so commits never wait. Threshold-gate + cache make",
+    "# typical re-runs ~85ms. Logs go to ~/.hivemind/post-commit.log",
+    "# mkdir is robust against first-run: $HOME/.hivemind may not exist yet,",
+    "# in which case the > redirect would fail and the build would never start.",
+    'mkdir -p "$HOME/.hivemind" 2>/dev/null || true',
+    `nohup ${quoteForShell(hivemindPath)} graph build --trigger post-commit >> "$HOME/.hivemind/post-commit.log" 2>&1 &`,
+  ];
+}
+
+/** Single-quote `path` for safe POSIX shell use; embeds the path literally. */
+function quoteForShell(path: string): string {
+  return `'${path.replace(/'/g, `'\\''`)}'`;
+}
 
 export type InstallStatus =
   | { kind: "installed"; path: string; wasNew: boolean }
@@ -45,11 +60,27 @@ export interface InstallOptions {
 }
 
 /**
- * Find the .git directory for `cwd`. Returns the absolute path or null when
- * cwd is not inside a git repo. Uses `git rev-parse --git-path hooks` so
- * worktrees and shared-hook setups land in the right place.
+ * Find the hooks directory for `cwd`. Returns the absolute path or null when
+ * cwd is not inside a git repo.
+ *
+ * Resolution order (matches git's own precedence):
+ *   1. `core.hooksPath` — repo-level config that REDIRECTS hook execution
+ *      to a custom directory. Teams use this for shared hooks (e.g., via
+ *      Husky's _husky.sh / .husky/ or a monorepo's tools/git-hooks/).
+ *      If set, installing into .git/hooks/ would silently never fire.
+ *   2. `git rev-parse --git-path hooks` — the standard hooks dir, which
+ *      correctly handles worktrees, submodules, and bare repos.
  */
 export function gitHooksDir(cwd: string): string | null {
+  // 1) honor core.hooksPath if set
+  const configured = tryGitConfig(cwd, "core.hooksPath");
+  if (configured !== null) {
+    // Relative paths in core.hooksPath are resolved against the repo top-level,
+    // not cwd (per git's documented behavior).
+    const top = tryGitTopLevel(cwd);
+    return top !== null ? resolve(top, configured) : resolve(cwd, configured);
+  }
+  // 2) fall back to standard hooks dir
   try {
     const out = execFileSync("git", ["rev-parse", "--git-path", "hooks"], {
       cwd,
@@ -57,9 +88,33 @@ export function gitHooksDir(cwd: string): string | null {
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (out === "") return null;
-    // git returns a path relative to cwd; resolve via path.resolve.
-    // For absolute paths it's a no-op.
     return resolve(cwd, out);
+  } catch {
+    return null;
+  }
+}
+
+function tryGitConfig(cwd: string, key: string): string | null {
+  try {
+    const out = execFileSync("git", ["config", "--get", key], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out === "" ? null : out;
+  } catch {
+    return null; // missing key or not a git repo
+  }
+}
+
+function tryGitTopLevel(cwd: string): string | null {
+  try {
+    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out === "" ? null : out;
   } catch {
     return null;
   }
@@ -71,18 +126,31 @@ export function postCommitHookPath(cwd: string): string | null {
 }
 
 /**
- * Install our managed block in .git/hooks/post-commit.
+ * Install our managed block in the resolved post-commit hook path.
  *
  * Cases:
  *   1. No file at all → write a fresh hook with shebang + our block. Mark +x.
  *   2. File exists, contains our markers → leave alone (idempotent).
  *   3. File exists, no markers → refuse unless `force` is true; with force,
  *      overwrite the whole file (the user opted in).
+ *
+ * The hook embeds the absolute path to the hivemind binary (resolved at
+ * install time) so it keeps working under PATH-restricted environments
+ * (GUI git clients, cron, system Git wrappers).
  */
 export function installPostCommitHook(cwd: string, opts: InstallOptions = {}): InstallStatus {
   const path = postCommitHookPath(cwd);
   if (path === null) {
     return { kind: "foreign-hook", path: "", hint: "not in a git repo (no .git directory found)" };
+  }
+
+  const hivemindPath = resolveHivemindPath();
+  if (hivemindPath === null) {
+    return {
+      kind: "foreign-hook",
+      path,
+      hint: "hivemind binary not found on PATH. Install hivemind globally (`npm install -g @deeplake/hivemind`) before running `hivemind graph init`, so the hook can find a stable absolute path to call.",
+    };
   }
 
   if (existsSync(path)) {
@@ -101,7 +169,7 @@ export function installPostCommitHook(cwd: string, opts: InstallOptions = {}): I
   }
 
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, buildHookFile(), { mode: 0o755 });
+  writeFileSync(path, buildHookFile(hivemindPath), { mode: 0o755 });
   // chmod +x — writeFileSync's mode is honored on most systems but
   // not universally; re-chmod to be safe.
   try {
@@ -110,6 +178,35 @@ export function installPostCommitHook(cwd: string, opts: InstallOptions = {}): I
     // best-effort
   }
   return { kind: "installed", path, wasNew: true };
+}
+
+/**
+ * Resolve the absolute path to the hivemind binary at install time. We try,
+ * in order:
+ *   1. `which hivemind` — what the user's interactive shell would resolve
+ *   2. process.execPath fallback — only used if we're being executed via
+ *      `node /path/to/cli.js` directly (which is what happens when running
+ *      the bundled CLI in dev). We can't infer the production install path
+ *      from execPath alone, so we don't synthesize one.
+ *
+ * Returns null when neither source produces a working absolute path.
+ */
+function resolveHivemindPath(): string | null {
+  // Try `which hivemind` first — it gives us whatever the user's shell PATH
+  // would have resolved interactively.
+  for (const cmd of ["which", "command"]) {
+    try {
+      const args = cmd === "which" ? ["hivemind"] : ["-v", "hivemind"];
+      const out = execFileSync(cmd, args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (out !== "" && out.includes("hivemind")) return out.split("\n")[0]!.trim();
+    } catch {
+      // not found, try next
+    }
+  }
+  return null;
 }
 
 /**
@@ -155,24 +252,34 @@ export function containsOurMarkers(content: string): boolean {
   return content.includes(HOOK_BEGIN_MARKER) && content.includes(HOOK_END_MARKER);
 }
 
-/** Remove everything between BEGIN and END markers, inclusive (and one trailing newline). */
+/**
+ * Remove EXACTLY the bytes of the marker block (from the 'H' of HOOK_BEGIN
+ * through the last char of HOOK_END). Everything outside that range is
+ * preserved byte-for-byte — heredocs, intentional blank-line patterns, and
+ * other shell-significant whitespace in user-managed content stays as
+ * written.
+ *
+ * We deliberately do NOT consume the surrounding newlines. If buildHookFile
+ * produced a trailing newline after HOOK_END, that newline stays in the
+ * file after stripping — the "ours-only" branch in uninstall handles the
+ * leftover shebang/whitespace by deleting the whole file when nothing
+ * meaningful remains.
+ */
 function stripOurBlock(content: string): string {
-  const lines = content.split("\n");
-  const start = lines.findIndex((l) => l.includes(HOOK_BEGIN_MARKER));
-  const end = lines.findIndex((l) => l.includes(HOOK_END_MARKER));
-  if (start === -1 || end === -1 || end < start) return content;
-  // Drop start..end inclusive
-  const kept = [...lines.slice(0, start), ...lines.slice(end + 1)];
-  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  const beginIdx = content.indexOf(HOOK_BEGIN_MARKER);
+  const endIdx = content.indexOf(HOOK_END_MARKER);
+  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return content;
+  const blockEnd = endIdx + HOOK_END_MARKER.length;
+  return content.slice(0, beginIdx) + content.slice(blockEnd);
 }
 
 /** Compose the full post-commit file content (shebang + our managed block). */
-export function buildHookFile(): string {
+export function buildHookFile(hivemindPath: string): string {
   return [
     SHEBANG,
     "",
     HOOK_BEGIN_MARKER,
-    ...HOOK_BODY,
+    ...hookBodyLines(hivemindPath),
     HOOK_END_MARKER,
     "",
   ].join("\n");
