@@ -491,6 +491,11 @@ export async function runBuildCommand(args: string[]): Promise<void> {
     case "inserted":
       console.log(`Cloud:         pushed to codebase table (commit ${pushOutcome.commitSha.slice(0, 7)})`);
       break;
+    case "inserted-with-duplicate-race":
+      console.warn(`Cloud:         pushed (commit ${pushOutcome.commitSha.slice(0, 7)}) but ${pushOutcome.rowCount} rows now share`);
+      console.warn(`               this identity key — a concurrent writer raced. v1.1 adds a server-side`);
+      console.warn(`               UNIQUE constraint; until then, the older row(s) should be deleted manually.`);
+      break;
     case "already-current":
       console.log(`Cloud:         already up-to-date (commit ${pushOutcome.commitSha.slice(0, 7)})`);
       break;

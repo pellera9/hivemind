@@ -134,11 +134,16 @@ describe("pushSnapshot — SELECT-before-INSERT path", () => {
 
     // ensureCodebaseTable called once with the configured name
     expect(calls.ensure).toEqual(["codebase_test"]);
-    // Exactly one SELECT and one INSERT
+    // SELECT (pre-INSERT existence check) + INSERT + SELECT (post-INSERT
+    // duplicate-race verification) = 2 SELECTs, 1 INSERT. The second
+    // SELECT is the codex-P1 mitigation: surfaces concurrent inserts.
     const selects = calls.queries.filter((q) => q.startsWith("SELECT"));
     const inserts = calls.queries.filter((q) => q.startsWith("INSERT"));
-    expect(selects).toHaveLength(1);
+    expect(selects).toHaveLength(2);
     expect(inserts).toHaveLength(1);
+    // Both SELECTs target the same identity key (proves we re-check exactly
+    // the row we just wrote, not something broader).
+    expect(selects[0]).toBe(selects[1]);
 
     // SELECT carries the full identity key
     expect(selects[0]).toContain("org_id = 'test-org'");
@@ -152,6 +157,74 @@ describe("pushSnapshot — SELECT-before-INSERT path", () => {
     expect(inserts[0]).toContain('"codebase_test"');
     expect(inserts[0]).toContain("snapshot_jsonb");
     expect(inserts[0]).toContain("snapshot_sha256");
+
+    // P1 codex fix: parent_sha MUST be an empty string literal, NOT the
+    // current commit_sha (writing commit_sha into parent_sha persists
+    // false ancestry data). The 17 values include parent_sha at position
+    // 7 in the VALUES list (org, workspace, repo, user, worktree, commit,
+    // parent, ...). Easiest invariant: the literal "'abc123'" appears only
+    // for the commit_sha slot, NOT in two consecutive slots.
+    const commitOccurrences = (inserts[0].match(/'abc123'/g) ?? []).length;
+    expect(commitOccurrences).toBe(1);
+    // And the parent_sha slot specifically is empty: 'abc123', '' sequence.
+    expect(inserts[0]).toContain("'abc123', '',");
+  });
+
+  it("post-INSERT re-SELECT detects duplicate-row race", async () => {
+    // First SELECT returns empty (caller proceeds to INSERT). Post-INSERT
+    // re-SELECT returns 2 rows (a concurrent writer also inserted).
+    let selectCallCount = 0;
+    const calls = { ensure: [] as string[], queries: [] as string[] };
+    const api = {
+      ensureCodebaseTable: vi.fn(async (name: string) => { calls.ensure.push(name); }),
+      query: vi.fn(async (sql: string) => {
+        calls.queries.push(sql);
+        if (sql.startsWith("SELECT")) {
+          selectCallCount++;
+          if (selectCallCount === 1) return [];
+          return [
+            { snapshot_sha256: "sha-a" },
+            { snapshot_sha256: "sha-b" },
+          ];
+        }
+        return [];
+      }),
+    } as unknown as DeeplakeApi;
+
+    const result = await pushSnapshot(makeSnapshot("abc123"), "wt1", {
+      loadConfig: makeConfig,
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("inserted-with-duplicate-race");
+    if (result.kind === "inserted-with-duplicate-race") {
+      expect(result.commitSha).toBe("abc123");
+      expect(result.rowCount).toBe(2);
+    }
+    // Confirm the post-INSERT re-SELECT actually fired (SELECT → INSERT → SELECT)
+    expect(calls.queries.filter((q) => q.startsWith("SELECT"))).toHaveLength(2);
+    expect(calls.queries.filter((q) => q.startsWith("INSERT"))).toHaveLength(1);
+  });
+
+  it("post-INSERT re-SELECT failure does NOT downgrade success", async () => {
+    // INSERT succeeds. Post-INSERT verification throws (transient). Result
+    // must remain "inserted" — the row IS committed; we just can't verify.
+    let selectCallCount = 0;
+    const api = {
+      ensureCodebaseTable: vi.fn(async () => {}),
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith("SELECT")) {
+          selectCallCount++;
+          if (selectCallCount === 1) return [];
+          throw new Error("transient network");
+        }
+        return [];
+      }),
+    } as unknown as DeeplakeApi;
+    const result = await pushSnapshot(makeSnapshot("abc123"), "wt1", {
+      loadConfig: makeConfig,
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("inserted");
   });
 
   it("existing row with same sha256 → already-current (NO INSERT)", async () => {

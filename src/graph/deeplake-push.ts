@@ -18,6 +18,19 @@
  *     build caller. The local snapshot is the source of truth; cloud is
  *     a sync target.
  *
+ * Known concurrency gap (codex P1, accepted for v1.1):
+ *   The codebase table has no UNIQUE constraint on the identity key. SELECT
+ *   + INSERT is therefore NOT atomic — two writers that both observe "no
+ *   row" can both insert. Mitigations in place:
+ *     1. The Stop / SessionEnd auto-build path acquires a cross-process
+ *        build lock (src/graph/build-lock.ts) keyed by repo, serializing
+ *        the most common concurrent caller.
+ *     2. Post-INSERT this function re-SELECTs and returns
+ *        `inserted-with-duplicate-race` if >1 row is found, making the
+ *        race visible rather than silent.
+ *   The proper fix (server-side UNIQUE on the 6-column identity key) lands
+ *   in v1.1 once the Deeplake schema API supports it.
+ *
  * Privacy: push only happens when `loadConfig()` returns auth credentials.
  * No auth → silent no-op (the user wasn't logged in; they didn't opt in).
  * Disable explicitly via `HIVEMIND_GRAPH_PUSH=0` in env.
@@ -34,6 +47,7 @@ export type PushOutcome =
   | { kind: "skipped-no-auth" }
   | { kind: "skipped-disabled" }
   | { kind: "inserted"; commitSha: string }
+  | { kind: "inserted-with-duplicate-race"; commitSha: string; rowCount: number }
   | { kind: "already-current"; commitSha: string }
   | { kind: "drift"; commitSha: string; localSha256: string; cloudSha256: string }
   | { kind: "error"; message: string };
@@ -130,7 +144,7 @@ export async function pushSnapshot(
     `'${sqlStr(userId)}', ` +
     `'${sqlStr(worktreeId)}', ` +
     `'${sqlStr(commitSha)}', ` +
-    `'${sqlStr(snapshot.graph.commit_sha ?? "")}', ` + // parent_sha placeholder — Phase 1.5 doesn't compute it; v1.6 reads git rev-parse HEAD~1
+    `'', ` + // parent_sha intentionally empty — v1.1 populates from `git rev-parse HEAD~1`. NEVER reuse commit_sha here; consumers rely on this column reflecting the true parent.
     `'${sqlStr(observation.branch ?? "")}', ` +
     `'${sqlStr(observation.ts)}', ` +
     `'${sqlStr(userId)}', ` +
@@ -144,10 +158,26 @@ export async function pushSnapshot(
 
   try {
     await api.query(insertSql);
-    return { kind: "inserted", commitSha };
   } catch (err) {
     return errorOutcome("INSERT", err);
   }
+
+  // Post-INSERT verification: the codebase table has no UNIQUE constraint on
+  // the identity key (Deeplake doesn't expose one in this schema), so a
+  // concurrent writer that also passed the SELECT-empty check could have
+  // inserted a duplicate row. Re-SELECT and report if >1 row exists.
+  // This does NOT prevent the race — it makes it observable. The proper
+  // fix is a server-side UNIQUE constraint (v1.1 follow-up).
+  try {
+    const verify = await api.query(selectSql);
+    if (verify.length > 1) {
+      return { kind: "inserted-with-duplicate-race", commitSha, rowCount: verify.length };
+    }
+  } catch {
+    // Verification failure does not affect the INSERT outcome — the row is
+    // committed regardless. Log nothing here; the next push will re-check.
+  }
+  return { kind: "inserted", commitSha };
 }
 
 function defaultMakeApi(config: Config): DeeplakeApi {
