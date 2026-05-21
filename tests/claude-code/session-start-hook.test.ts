@@ -214,6 +214,29 @@ describe("session-start hook — placeholder branching", () => {
     expect(queryMock).toHaveBeenCalledTimes(4);
   });
 
+  it("non-empty rules+tasks block is appended to additionalContext (T6 coverage)", async () => {
+    // The default tests use queryMock-returns-[] which produces an
+    // empty rulesTasksBlock and exercises the "false" branch of the
+    // additionalContext ternary. This test populates rules so the
+    // renderer returns content and the "true" branch (concat) fires.
+    const rule = {
+      id: "row-1", rule_id: "rule-1", text: "no DROP TABLE on prod",
+      scope: "team", status: "active", assigned_by: "alice@activeloop.ai",
+      version: 1, created_at: "2026-05-20T10:00:00Z",
+      agent: "manual", plugin_version: "0.7.99",
+    };
+    queryMock.mockResolvedValueOnce([]);     // placeholder SELECT
+    queryMock.mockResolvedValueOnce([]);     // placeholder INSERT
+    queryMock.mockResolvedValueOnce([rule]); // renderer rules
+    queryMock.mockResolvedValueOnce([]);     // renderer team-tasks
+    queryMock.mockResolvedValueOnce([]);     // renderer mine-tasks
+    const out = await runHook();
+    expect(out).toBeTruthy();
+    const parsed = JSON.parse(out!);
+    expect(parsed.hookSpecificOutput.additionalContext).toContain("HIVEMIND RULES");
+    expect(parsed.hookSpecificOutput.additionalContext).toContain("no DROP TABLE on prod");
+  });
+
   it("HIVEMIND_CAPTURE=false: no placeholder, no DDL (ensure), but renderer still runs (codex P2 pass 4)", async () => {
     await runHook({ HIVEMIND_CAPTURE: "false" });
     // ensureTable + ensureSessionsTable are DDL writes (create/heal),
