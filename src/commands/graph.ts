@@ -24,6 +24,10 @@ import {
   printDiffHuman,
 } from "../graph/diff.js";
 import { extractTypeScript } from "../graph/extract/typescript.js";
+import {
+  installPostCommitHook,
+  uninstallPostCommitHook,
+} from "../graph/git-hook-install.js";
 import { countHistoryEntries, readHistoryTail, type SnapshotTrigger } from "../graph/history.js";
 import { buildSnapshot, repoDir, writeSnapshot } from "../graph/snapshot.js";
 import type {
@@ -54,11 +58,25 @@ Usage:
       (short), node/edge counts, and the trigger that fired the build.
       --json: emit raw JSONL (one parsed entry per line, full fields).
 
+  hivemind graph init [--cwd <path>] [--force] [--no-initial-build]
+      Install a managed block in .git/hooks/post-commit that fires
+      \`hivemind graph build --trigger post-commit\` after each commit
+      (async, non-blocking, exit 0 always). Idempotent: re-running on
+      an already-installed hook is a no-op. Refuses to clobber an
+      existing non-managed hook unless --force is passed.
+      Also runs an initial \`hivemind graph build\` unless
+      --no-initial-build is passed.
+
+  hivemind graph uninstall [--cwd <path>]
+      Remove our managed block from .git/hooks/post-commit. If our block
+      was the only content, deletes the file; otherwise leaves the rest
+      intact. Snapshots and history are NOT touched (\`rm -rf
+      ~/.hivemind/graphs/<key>\` if you really want them gone).
+
   hivemind graph --help
       Show this message.
 
-  Future subcommands (Phase 1.5+): daemon, search, latest, push, pull,
-  init, uninstall, prune.
+  Future subcommands (Phase 1.5+): daemon, search, latest, push, pull, prune.
 `;
 
 /**
@@ -94,9 +112,118 @@ export function runGraphCommand(args: string[]): void {
     runHistoryCommand(args.slice(1));
     return;
   }
+  if (sub === "init") {
+    runInitCommand(args.slice(1));
+    return;
+  }
+  if (sub === "uninstall") {
+    runUninstallCommand(args.slice(1));
+    return;
+  }
   console.error(`hivemind graph: unknown subcommand '${sub}'`);
   console.error(USAGE);
   process.exit(2);
+}
+
+interface InitOptions {
+  cwd: string;
+  force: boolean;
+  initialBuild: boolean;
+}
+
+function parseInitArgs(args: string[]): InitOptions {
+  let cwd = process.cwd();
+  let force = false;
+  let initialBuild = true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--cwd" && i + 1 < args.length) {
+      cwd = args[i + 1]!;
+      i += 1;
+    } else if (a === "--force") {
+      force = true;
+    } else if (a === "--no-initial-build") {
+      initialBuild = false;
+    } else if (a === "--help" || a === "-h") {
+      console.log(USAGE);
+      process.exit(0);
+    } else {
+      console.error(`hivemind graph init: unknown argument '${a}'`);
+      console.error(USAGE);
+      process.exit(2);
+    }
+  }
+  return { cwd, force, initialBuild };
+}
+
+function runInitCommand(args: string[]): void {
+  const opts = parseInitArgs(args);
+  const status = installPostCommitHook(opts.cwd, { force: opts.force });
+  switch (status.kind) {
+    case "installed":
+      console.log(`Installed post-commit hook at ${status.path}`);
+      break;
+    case "already-ours":
+      console.log(`Post-commit hook already managed by hivemind (no change): ${status.path}`);
+      break;
+    case "foreign-hook":
+      console.error(`hivemind graph init: ${status.hint}`);
+      process.exit(1);
+  }
+  if (opts.initialBuild) {
+    console.log("");
+    console.log("Running initial build...");
+    runBuildCommand(["--cwd", opts.cwd, "--trigger", "manual"]);
+  } else {
+    console.log("");
+    console.log("Skipped initial build (--no-initial-build). Run `hivemind graph build` when ready.");
+  }
+}
+
+interface UninstallOptions {
+  cwd: string;
+}
+
+function parseUninstallArgs(args: string[]): UninstallOptions {
+  let cwd = process.cwd();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--cwd" && i + 1 < args.length) {
+      cwd = args[i + 1]!;
+      i += 1;
+    } else if (a === "--help" || a === "-h") {
+      console.log(USAGE);
+      process.exit(0);
+    } else {
+      console.error(`hivemind graph uninstall: unknown argument '${a}'`);
+      console.error(USAGE);
+      process.exit(2);
+    }
+  }
+  return { cwd };
+}
+
+function runUninstallCommand(args: string[]): void {
+  const opts = parseUninstallArgs(args);
+  const status = uninstallPostCommitHook(opts.cwd);
+  switch (status.kind) {
+    case "removed":
+      if (status.wholeFileDeleted) {
+        console.log(`Removed post-commit hook (file deleted): ${status.path}`);
+      } else {
+        console.log(`Removed managed block from post-commit hook (other content preserved): ${status.path}`);
+      }
+      console.log("Local snapshots + history.jsonl are untouched.");
+      break;
+    case "no-hook":
+      console.log(
+        status.path === "" ? "No git repo here (nothing to uninstall)." : `No post-commit hook at ${status.path} (nothing to uninstall).`,
+      );
+      break;
+    case "not-ours":
+      console.error(`hivemind graph uninstall: ${status.hint}`);
+      process.exit(1);
+  }
 }
 
 interface HistoryOptions {
