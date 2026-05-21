@@ -134,9 +134,20 @@ export async function pullSnapshot(
 
   // Compare with local. readLastBuild returns null on missing/corrupt
   // files; in that case we ALWAYS pull (no comparison possible).
+  //
+  // Codex P1 fix: gate the comparison on local.commit_sha === head.
+  // `.last-build.json` records the last build for ANY commit in the
+  // repo. Without this gate, if I'd built commit B (ts=1000) then
+  // checked out commit A, HEAD=A and cloud has A at ts=500, the raw
+  // comparison would say "local newer" and refuse to pull — but local
+  // has no snapshot for A at all. The timestamp/sha comparison is only
+  // semantically meaningful when local and cloud refer to the SAME
+  // commit. When they don't, we fall through to the pull branch and
+  // let the cloud bytes land locally (correct outcome: the user
+  // doesn't have A locally and we just fetched it).
   const baseDir = repoDir(repoKey);
   const local = readLastBuild(baseDir);
-  if (local !== null) {
+  if (local !== null && local.commit_sha === head) {
     if (local.snapshot_sha256 === cloudSha256) {
       return { kind: "up-to-date", commitSha: head, snapshotSha256: cloudSha256 };
     }

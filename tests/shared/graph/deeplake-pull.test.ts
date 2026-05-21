@@ -280,6 +280,78 @@ describe("pullSnapshot — outcome resolution", () => {
     expect(parsed.commit_sha).toBe("head1234abcd");
   });
 
+  it("codex P1 regression: local sidecar points at a DIFFERENT commit → ignored, pull proceeds", async () => {
+    // Scenario from codex review:
+    //   1. User built commit B locally (ts=2_000_000_000_000)
+    //   2. User checked out commit A (older)
+    //   3. HEAD = A. snapshots/A.json doesn't exist locally.
+    //   4. Cloud has commit A at ts=1_000_000_000_000 (older than local's
+    //      record for B, but A is what we're asking about)
+    // Buggy old behavior: local.ts > cloud.ts → "local-newer", refuse to
+    // pull, leave A unavailable.
+    // Fixed behavior: local.commit_sha (B) != head (A) → ignore the local
+    // sidecar's ts entirely, fall through to pull.
+    mkdirSync(baseDir, { recursive: true });
+    writeLastBuild(baseDir, {
+      ts: 2_000_000_000_000,
+      commit_sha: "different-commit-B",
+      snapshot_sha256: "sha-for-B",
+      node_count: 1,
+      edge_count: 0,
+    });
+    const cloudSha = "f".repeat(64);
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: CLOUD_PAYLOAD,
+        snapshot_sha256: cloudSha,
+        ts: 1_000_000_000_000,
+        node_count: 7, edge_count: 3,
+        worktree_id: "remote-wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "head1234abcd", // HEAD = A, NOT B
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("pulled");
+    // After pull: snapshot file for A exists, last-build now points at A
+    expect(existsSync(join(baseDir, "snapshots", "head1234abcd.json"))).toBe(true);
+    const lb = readLastBuild(baseDir);
+    expect(lb!.commit_sha).toBe("head1234abcd");
+    expect(lb!.snapshot_sha256).toBe(cloudSha);
+  });
+
+  it("local sha256 matches cloud sha256 but for a DIFFERENT commit → pull anyway", async () => {
+    // Defensive: sha collisions across different commits would be astronomic
+    // but the gate must be commit-keyed, not sha-keyed. If local says "I have
+    // sha X for commit B" and cloud says "commit A has sha X" — those are
+    // unrelated facts; we should still pull A.
+    mkdirSync(baseDir, { recursive: true });
+    writeLastBuild(baseDir, {
+      ts: 1_000_000,
+      commit_sha: "commit-B",
+      snapshot_sha256: "a".repeat(64),
+      node_count: 1,
+      edge_count: 0,
+    });
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: CLOUD_PAYLOAD,
+        snapshot_sha256: "a".repeat(64), // same sha string, but cloud row is for commit A
+        ts: 2_000_000,
+        node_count: 7, edge_count: 3,
+        worktree_id: "remote-wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "commit-A", // != local.commit_sha
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("pulled");
+  });
+
   it("local present but cloud has newer ts → pulls (overwrites local)", async () => {
     mkdirSync(baseDir, { recursive: true });
     writeLastBuild(baseDir, {
