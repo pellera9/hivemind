@@ -202,11 +202,10 @@ export default defineConfig({
         },
         "src/hooks/session-start.ts": {
           // Graph-pull worker spawn gated on creds?.token + graphContextLine
-          // inject — both authenticated branches; the un-auth path skips
-          // them. Direct unit tests for that gate are listed as a v1.1
-          // follow-up.
+          // inject. Both branches (auth+no-auth, graph-present+absent) are
+          // covered directly in tests/claude-code/session-start-graph-worker.test.ts.
           statements: 90,
-          branches: 85,
+          branches: 90,
           functions: 90,
           lines: 90,
         },
@@ -245,11 +244,16 @@ export default defineConfig({
           lines: 90,
         },
         "src/deeplake-api.ts": {
-          // ensureCodebaseTable + dual-index branch (legacy 6-key, v2 5-key)
-          // added in batch B. Branch coverage hit by e2e push/pull tests but
-          // not by direct unit tests in this file — tracked as a v1.1 gap.
+          // ensureCodebaseTable (create + heal + ensureLookupIndex branches)
+          // covered directly in tests/shared/deeplake-api-codebase-table.test.ts.
+          // Branches sits at 89.85 (one branch shy of 90) — the lone gap is
+          // the MEMORY_COLUMNS drift guard at L481 (throws if a frozen schema
+          // constant doesn't include SUMMARY_EMBEDDING_COL). Reachable only
+          // by editing the schema file, so a unit test would have to mock the
+          // module's frozen export — not worth the contrivance for one
+          // defensive guard. Hold at 89.
           statements: 90,
-          branches: 85,
+          branches: 89,
           functions: 90,
           lines: 90,
         },
