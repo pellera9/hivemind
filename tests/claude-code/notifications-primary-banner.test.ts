@@ -228,6 +228,56 @@ describe("pickPrimaryBanner — savings recap (when org savings > 1k)", () => {
     expect(n!.body).toContain("1 memory search");
     expect(n!.body).not.toContain("1 memory searches");
   });
+
+  // Offline + skills > 0 path (lines 213-214 of primary-banner.ts).
+  // The other offline test seeds no .claude/skills dir so the if-gate
+  // stays false. Singular-skill flavor here.
+  it("OFFLINE includes skill segment when exactly 1 skill is generated", async () => {
+    mkdirSync(join(TEMP_HOME, ".claude", "skills", "demo--ada"), { recursive: true });
+    appendUsageRecord({
+      endedAt: "2026-05-18T00:00:00Z",
+      sessionId: "s-skills-1",
+      memorySearchBytes: 6_000_000,
+      memorySearchCount: 10,
+    });
+    orgStatsMock.mockResolvedValue(null);
+    const n = await pickPrimaryBanner("s-1", FRESH_CREDS);
+    expect(n!.id).toBe("savings-recap");
+    expect(n!.body).toContain("1 skill generated");
+    expect(n!.body).not.toContain("1 skills generated");
+  });
+
+  // Offline + skills > 1 (plural side of the skillsGenerated === 1 ternary
+  // at line 214). Pairs with the singular test above to lock both arms.
+  it("OFFLINE renders plural skills when more than one skill is generated", async () => {
+    for (const name of ["a--ada", "b--ada", "c--ada", "d--ada"]) {
+      mkdirSync(join(TEMP_HOME, ".claude", "skills", name), { recursive: true });
+    }
+    appendUsageRecord({
+      endedAt: "2026-05-18T00:00:00Z",
+      sessionId: "s-skills-many",
+      memorySearchBytes: 6_000_000,
+      memorySearchCount: 10,
+    });
+    orgStatsMock.mockResolvedValue(null);
+    const n = await pickPrimaryBanner("s-1", FRESH_CREDS);
+    expect(n!.body).toContain("4 skills generated");
+  });
+
+  // Online with skills missing (lines 180 false branch): existing tests
+  // never explicitly assert the "no skill segment" path even though most
+  // of them implicitly hit it (HOME tmp dir has no .claude/skills).
+  // Pinning it down here so a refactor that always appends the segment
+  // would fail loudly instead of silently.
+  it("renders no skill segment when no skills are generated", async () => {
+    orgStatsMock.mockResolvedValue({
+      org:  { sessionsCount: 5, memoryRecallCount: 5, memorySearchBytes: 6_000_000 },
+      user: { sessionsCount: 1, memoryRecallCount: 1, memorySearchBytes: 4_000 },
+    });
+    const n = await pickPrimaryBanner("s-1", FRESH_CREDS);
+    expect(n!.body).not.toContain("skill");
+    expect(n!.body).not.toContain("skills");
+  });
 });
 
 describe("formatTokens", () => {
