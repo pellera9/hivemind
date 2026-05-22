@@ -47,19 +47,33 @@ export interface KpiPathParts {
  * Strip any leading mount prefix and split the remainder into path
  * segments. Returns `null` for empty paths.
  *
- * The deeplake-shell mount is configurable: in production the
- * default is `/` and goal paths arrive as `/goal/...`, while some
- * test configurations use `/memory` mount and paths arrive as
- * `/memory/goal/...`. Accept either form so the classifier is
- * mount-agnostic.
+ * The deeplake-shell mount is configurable AND agent writes can
+ * arrive in multiple shapes:
+ *   - Write tool, mount-relative:           /goal/<u>/<s>/<id>.md
+ *   - Some test mounts:                     /memory/goal/<u>/...
+ *   - Bash `echo > ~/...` inside the shell
+ *     where HOME=mount=/:                   /.deeplake/memory/goal/<u>/...
+ *   - Bash on the host filesystem:          /home/<user>/.deeplake/memory/goal/<u>/...
+ *
+ * We accept all of them by finding the last occurrence of
+ * `/memory/` in the path and treating everything after it as the
+ * mount-relative form. Fallback for paths without `/memory/` is the
+ * original "strip leading slash + optional memory/ prefix" logic.
  */
 function segmentsUnderMemory(p: string): string[] | null {
-  let s = p.replace(/^\/+/, "").replace(/\/+$/, "");
-  if (s.length === 0) return null;
-  // Optional "memory/" prefix — strip when present so the rest of
-  // the helper treats both mounts uniformly.
-  if (s === "memory") return null;
-  if (s.startsWith("memory/")) s = s.slice("memory/".length);
+  let s = p.replace(/\/+$/, "");
+  // If the path contains a /memory/ segment anywhere, take what
+  // follows the LAST such occurrence. This covers .deeplake/memory/
+  // and /home/<user>/.deeplake/memory/ prefixes that arrive from
+  // Bash `echo > ~/...` redirects inside the deeplake-shell.
+  const memIdx = s.lastIndexOf("/memory/");
+  if (memIdx >= 0) {
+    s = s.slice(memIdx + "/memory/".length);
+  } else {
+    s = s.replace(/^\/+/, "");
+    if (s === "memory") return null;
+    if (s.startsWith("memory/")) s = s.slice("memory/".length);
+  }
   if (s.length === 0) return null;
   return s.split("/");
 }

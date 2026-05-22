@@ -16,6 +16,7 @@ import { runAuthCommand } from "../commands/auth-login.js";
 import { runSkillifyCommand } from "../commands/skillify.js";
 import { runRulesCommand } from "../commands/rules.js";
 import { runTasksCommand } from "../commands/tasks.js";
+import { runGoalCommand, runKpiCommand } from "../commands/goal.js";
 import { runContextCommand } from "../commands/context.js";
 import { confirm, detectPlatforms, allPlatformIds, log, promptLine, warn, type PlatformId } from "./util.js";
 import { getVersion } from "./version.js";
@@ -376,6 +377,16 @@ async function main(): Promise<void> {
 
   if (cmd === "tasks") {
     await runTasksCommand(args.slice(1));
+    return;
+  }
+
+  if (cmd === "goal" || cmd === "goals") {
+    await runGoalCommand(args.slice(1));
+    return;
+  }
+
+  if (cmd === "kpi" || cmd === "kpis") {
+    await runKpiCommand(args.slice(1));
     return;
   }
 

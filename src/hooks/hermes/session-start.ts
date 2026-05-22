@@ -24,7 +24,7 @@ import { log as _log } from "../../utils/debug.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
 import { autoUpdate } from "../shared/autoupdate.js";
 import { autoPullSkills } from "../../skillify/auto-pull.js";
-import { GOALS_INSTRUCTIONS } from "../shared/goals-instructions.js";
+import { GOALS_INSTRUCTIONS_CLI } from "../shared/goals-instructions.js";
 const log = (msg: string) => _log("hermes-session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -187,10 +187,11 @@ async function main(): Promise<void> {
   const baseContext = creds?.token
     ? `${context}\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}`
     : `${context}\nNot logged in to Deeplake. Run: hivemind login${localMinedNote}${versionNotice}`;
-  // Append the goals/KPI path convention so hermes (no SKILL.md
-  // loader) knows the workflow. Shared constant — see cursor's
-  // SessionStart for the same pattern.
-  const baseWithGoals = creds?.token ? `${baseContext}\n\n${GOALS_INSTRUCTIONS}` : baseContext;
+  // Hermes' pre-tool-use intercepts only `terminal` — it cannot
+  // route Write/Edit. Use the CLI variant: agent invokes
+  // `hivemind goal add/list/...` via terminal. End state in tables
+  // is identical to the VFS-routed path.
+  const baseWithGoals = creds?.token ? `${baseContext}\n\n${GOALS_INSTRUCTIONS_CLI}` : baseContext;
   const additional = rulesTasksBlock
     ? `${baseWithGoals}\n\n${rulesTasksBlock}`
     : baseWithGoals;

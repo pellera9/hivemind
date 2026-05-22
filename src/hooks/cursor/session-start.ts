@@ -33,7 +33,7 @@ import { log as _log } from "../../utils/debug.js";
 import { getInstalledVersion } from "../../utils/version-check.js";
 import { autoUpdate } from "../shared/autoupdate.js";
 import { autoPullSkills } from "../../skillify/auto-pull.js";
-import { GOALS_INSTRUCTIONS } from "../shared/goals-instructions.js";
+import { GOALS_INSTRUCTIONS_CLI } from "../shared/goals-instructions.js";
 const log = (msg: string) => _log("cursor-session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -219,11 +219,12 @@ async function main(): Promise<void> {
   const baseContext = creds?.token
     ? `${context}\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${versionNotice}`
     : `${context}\nNot logged in to Deeplake. Run: hivemind login${localMinedNote}${versionNotice}`;
-  // Append the goals/KPI path convention so cursor (which has no
-  // SKILL.md loader) knows the workflow. The shared constant keeps
-  // this in sync with hermes + the SKILL.md content for claude-code/
-  // codex/openclaw.
-  const baseWithGoals = creds?.token ? `${baseContext}\n\n${GOALS_INSTRUCTIONS}` : baseContext;
+  // Cursor cannot route Write/Edit through hivemind hooks (its
+  // pre-tool-use only intercepts Shell). So the agent here uses
+  // the CLI variant — `hivemind goal add/list/...` invoked as
+  // shell commands. Same end state (rows in hivemind_goals /
+  // hivemind_kpis), different code path inside the agent.
+  const baseWithGoals = creds?.token ? `${baseContext}\n\n${GOALS_INSTRUCTIONS_CLI}` : baseContext;
   const additionalContext = rulesTasksBlock
     ? `${baseWithGoals}\n\n${rulesTasksBlock}`
     : baseWithGoals;
