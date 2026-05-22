@@ -10,6 +10,8 @@ import {
   RULES_COLUMNS,
   TASKS_COLUMNS,
   TASK_EVENTS_COLUMNS,
+  GOALS_COLUMNS,
+  KPIS_COLUMNS,
   buildCreateTableSql,
   healMissingColumns,
 } from "./deeplake-schema.js";
@@ -617,6 +619,52 @@ export class DeeplakeApi {
     }
     await this.healSchema(safe, TASK_EVENTS_COLUMNS);
     await this.ensureLookupIndex(safe, "task_id_kpi_id", `("task_id", "kpi_id")`);
+  }
+
+  /**
+   * Create the goals table.
+   *
+   * Backed by the VFS path convention memory/goal/<owner>/<status>/<goal_id>.md.
+   * INSERT-only version-bumped: rm and mv operations translate to fresh
+   * v=N+1 rows (status flips for mv → closed; rm is the same soft-close).
+   * The (goal_id, version) index lets the VFS dispatch a cheap latest-row
+   * read on cat / Read of a single goal.
+   */
+  async ensureGoalsTable(name: string): Promise<void> {
+    const safe = sqlIdent(name);
+    const tables = await this.listTables();
+    if (!tables.includes(safe)) {
+      log(`table "${safe}" not found, creating`);
+      await this.createTableWithRetry(buildCreateTableSql(safe, GOALS_COLUMNS), safe);
+      log(`table "${safe}" created`);
+      if (!tables.includes(safe)) this._tablesCache = [...tables, safe];
+    }
+    await this.healSchema(safe, GOALS_COLUMNS);
+    await this.ensureLookupIndex(safe, "goal_id_version", `("goal_id", "version")`);
+    // Secondary index: SessionStart banner filters by owner+status, so
+    // the (owner, status) pair lookup is the hot path.
+    await this.ensureLookupIndex(safe, "owner_status", `("owner", "status")`);
+  }
+
+  /**
+   * Create the kpis table.
+   *
+   * Backed by memory/kpi/<goal_id>/<kpi_id>.md. KPI rows do NOT carry
+   * owner — ownership derives from the parent goal via logical join on
+   * goal_id. INSERT-only version-bumped. (goal_id, kpi_id) index is the
+   * canonical lookup the VFS uses on Read and Write.
+   */
+  async ensureKpisTable(name: string): Promise<void> {
+    const safe = sqlIdent(name);
+    const tables = await this.listTables();
+    if (!tables.includes(safe)) {
+      log(`table "${safe}" not found, creating`);
+      await this.createTableWithRetry(buildCreateTableSql(safe, KPIS_COLUMNS), safe);
+      log(`table "${safe}" created`);
+      if (!tables.includes(safe)) this._tablesCache = [...tables, safe];
+    }
+    await this.healSchema(safe, KPIS_COLUMNS);
+    await this.ensureLookupIndex(safe, "goal_id_kpi_id", `("goal_id", "kpi_id")`);
   }
 }
 

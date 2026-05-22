@@ -98,6 +98,8 @@ function fakeConfig(): Config {
     rulesTableName: "hivemind_rules",
     tasksTableName: "hivemind_tasks",
     taskEventsTableName: "hivemind_task_events",
+    goalsTableName: "hivemind_goals",
+    kpisTableName: "hivemind_kpis",
     memoryPath: "/tmp/fake-memory",
   };
 }
