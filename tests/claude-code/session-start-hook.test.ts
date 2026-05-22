@@ -79,6 +79,20 @@ vi.mock("../../src/skillify/local-manifest.js", async (importOriginal) => {
   };
 });
 
+// maybeAutoMineLocal mocked so the un-authed branch's both outcomes are
+// reachable without doing real file IO. Real call returns
+// `triggered: false, reason: "no-claude-sessions"` in the test env, which
+// leaves the `triggered === true` branch on session-start.ts:145
+// uncovered — a coverage gap CI's branch threshold (≥90%) flags.
+const maybeAutoMineLocalMock = vi.fn();
+vi.mock("../../src/skillify/spawn-mine-local-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/skillify/spawn-mine-local-worker.js")>();
+  return {
+    ...actual,
+    maybeAutoMineLocal: (...a: unknown[]) => maybeAutoMineLocalMock(...a),
+  };
+});
+
 let stdoutLines: string[] = [];
 const stdoutSpy = vi.spyOn(process.stdout, "write");
 
@@ -134,6 +148,10 @@ beforeEach(() => {
   // the new concrete-insight rendering.
   countLocalManifestEntriesMock.mockReset().mockReturnValue(0);
   getLatestInsightEntryMock.mockReset().mockReturnValue(null);
+  // Default: auto-mine guards trip (no claude sessions) — matches the
+  // common test scenario where the developer's HOME has no local
+  // sessions visible to the test runner.
+  maybeAutoMineLocalMock.mockReset().mockReturnValue({ triggered: false, reason: "no-claude-sessions" });
   // Disable auto-pull during this test: autoPullSkills would otherwise issue
   // an extra SQL query (against `skills`) through the same DeeplakeApi mock,
   // breaking the placeholder-branching call-count assertions. The auto-pull
@@ -385,6 +403,17 @@ describe("session-start hook — context shape edge cases", () => {
     const ctx = parsed.hookSpecificOutput.additionalContext;
     expect(ctx).toContain("5 local skills from past");
     expect(ctx).toContain("hivemind login");
+  });
+
+  it("logs `auto-mine: triggered (background)` when maybeAutoMineLocal returns triggered=true", async () => {
+    // Coverage guard for the ternary on src/hooks/session-start.ts:145.
+    // The "triggered=true" branch is what runs on real fresh-install
+    // flows — a coverage gap there means the path the conversion play
+    // depends on isn't asserted.
+    loadCredsMock.mockReturnValue(null);
+    maybeAutoMineLocalMock.mockReturnValueOnce({ triggered: true });
+    await runHook();
+    expect(debugLogMock).toHaveBeenCalledWith("auto-mine: triggered (background)");
   });
 
   it("renders the CONCRETE INSIGHT branch when getLatestInsightEntry returns a populated entry", async () => {
