@@ -107,16 +107,79 @@ describe("installCodex — happy path", () => {
     expect(existsSync(join(link, "SKILL.md"))).toBe(true);
   });
 
-  it("attempts to enable codex hooks via the codex CLI (best-effort, no throw on failure)", async () => {
+  it("attempts to enable the renamed `hooks` codex feature (best-effort, no throw on failure)", async () => {
     execFileSyncMock.mockImplementation(() => { throw new Error("codex not installed"); });
     const { installCodex } = await importInstaller();
     expect(() => installCodex()).not.toThrow();
-    // We did try.
     expect(execFileSyncMock).toHaveBeenCalledWith(
+      "codex",
+      ["features", "enable", "hooks"],
+      expect.any(Object),
+    );
+    // Defends against accidentally regressing to the deprecated flag name.
+    expect(execFileSyncMock).not.toHaveBeenCalledWith(
       "codex",
       ["features", "enable", "codex_hooks"],
       expect.any(Object),
     );
+  });
+
+  it("strips a legacy `codex_hooks = ...` line from ~/.codex/config.toml on install", async () => {
+    const cfgPath = join(tmpHome, ".codex", "config.toml");
+    writeFileSync(
+      cfgPath,
+      [
+        "model = \"gpt-5\"",
+        "",
+        "[features]",
+        "codex_hooks = true",
+        "hooks = true",
+        "some_other = true",
+        "",
+      ].join("\n"),
+    );
+    const { installCodex } = await importInstaller();
+    installCodex();
+    const cleaned = readFileSync(cfgPath, "utf-8");
+    expect(cleaned).not.toMatch(/^[ \t]*codex_hooks[ \t]*=/m);
+    // Everything else is preserved.
+    expect(cleaned).toMatch(/^hooks = true$/m);
+    expect(cleaned).toMatch(/^some_other = true$/m);
+    expect(cleaned).toMatch(/^\[features\]$/m);
+    expect(cleaned).toMatch(/^model = "gpt-5"$/m);
+  });
+
+  it("leaves config.toml untouched when no legacy `codex_hooks` line is present", async () => {
+    const cfgPath = join(tmpHome, ".codex", "config.toml");
+    const body = ["[features]", "hooks = true", ""].join("\n");
+    writeFileSync(cfgPath, body);
+    const { installCodex } = await importInstaller();
+    installCodex();
+    expect(readFileSync(cfgPath, "utf-8")).toBe(body);
+  });
+
+  it("does not match keys that merely share a `codex_hooks` prefix or appear in table headers", async () => {
+    const cfgPath = join(tmpHome, ".codex", "config.toml");
+    const body = [
+      "[features]",
+      "codex_hooks_other = true",
+      "",
+      "[features.codex_hooks]",
+      "nested = 1",
+      "",
+    ].join("\n");
+    writeFileSync(cfgPath, body);
+    const { installCodex } = await importInstaller();
+    installCodex();
+    // Whole body should survive — neither line is the deprecated top-level key.
+    expect(readFileSync(cfgPath, "utf-8")).toBe(body);
+  });
+
+  it("does not crash when config.toml does not exist", async () => {
+    // tmpHome/.codex exists but config.toml does not (default test setup).
+    const { installCodex } = await importInstaller();
+    expect(() => installCodex()).not.toThrow();
+    expect(existsSync(join(tmpHome, ".codex", "config.toml"))).toBe(false);
   });
 
   it("preserves a user-defined hook on a non-hivemind event when re-installing over an existing config", async () => {
