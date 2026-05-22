@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync as existsSyncReal, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
@@ -153,7 +153,7 @@ describe("canOfferInstallScan", () => {
 });
 
 describe("runInstallScan", () => {
-  it("spawns `skillify mine-local --n 3` against the same CLI bundle the install ran from", async () => {
+  it("spawns `skillify mine-local --n 3 --only claude_code` against the same CLI bundle the install ran from", async () => {
     nextChildBehavior = { exitCode: 0 };
     await runInstallScan();
     expect(spawnCalls).toHaveLength(1);
@@ -167,6 +167,44 @@ describe("runInstallScan", () => {
     // `--n 3` is the tight install-time session cap (vs default 8).
     expect(args).toContain("--n");
     expect(args[args.indexOf("--n") + 1]).toBe("3");
+    // `--only claude_code` honors the "scan your Claude Code sessions"
+    // copy — without it, mine-local would walk every installed agent
+    // and could surface an insight from Codex / Cursor (codex PR #198
+    // P2). Regression guard.
+    expect(args).toContain("--only");
+    expect(args[args.indexOf("--only") + 1]).toBe("claude_code");
+  });
+
+  it("deletes the manifest written by mine-local when no insight was produced (P1 guard)", async () => {
+    // codex PR #198 P1: mine-local writes a sentinel manifest even
+    // when 0 insights were found. That sentinel permanently disables
+    // future maybeAutoMineLocal() runs. We unlink it so background
+    // mining can retry as history accumulates.
+    const manifestPath = join(TMP_HOME, ".claude", "hivemind", "local-mined.json");
+    mkdirSync(join(TMP_HOME, ".claude", "hivemind"), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({ created_at: "x", entries: [] }));
+    nextChildBehavior = { exitCode: 0 };
+    nextInsightEntry = null;  // mine-local wrote the empty manifest
+    const result = await runInstallScan();
+    expect(result).toBeNull();
+    // Manifest must be gone so future background auto-mine can retry.
+    expect(existsSyncReal(manifestPath)).toBe(false);
+  });
+
+  it("preserves the manifest when an insight WAS produced", async () => {
+    const manifestPath = join(TMP_HOME, ".claude", "hivemind", "local-mined.json");
+    mkdirSync(join(TMP_HOME, ".claude", "hivemind"), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({
+      created_at: "x",
+      entries: [{ skill_name: "k", insight: "i", created_at: "z" }],
+    }));
+    nextChildBehavior = { exitCode: 0 };
+    nextInsightEntry = { skill_name: "k", insight: "i", created_at: "z" };
+    const result = await runInstallScan();
+    expect(result).not.toBeNull();
+    // Real manifest should still be there — we want the insight to
+    // persist for the user-visible banner on next SessionStart.
+    expect(existsSyncReal(manifestPath)).toBe(true);
   });
 
   it("resolves with the latest insight entry on clean exit when one exists", async () => {

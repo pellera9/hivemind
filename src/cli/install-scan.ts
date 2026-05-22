@@ -22,7 +22,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findAgentBin } from "../skillify/gate-runner.js";
@@ -125,7 +125,20 @@ export function runInstallScan(): Promise<LocalManifestEntry | null> {
     }
     const child = spawn(
       process.execPath,
-      [cliPath, "skillify", "mine-local", "--n", String(INSTALL_SCAN_SESSION_COUNT)],
+      [
+        cliPath,
+        "skillify",
+        "mine-local",
+        "--n",
+        String(INSTALL_SCAN_SESSION_COUNT),
+        // The install copy advertises a "Claude Code" scan, so filter
+        // the mine-local picker to claude_code sessions. Without this,
+        // mine-local walks every installed agent (Codex, Cursor,
+        // Hermes, pi) and could surface an insight from a Codex
+        // session despite what we promised — codex PR #198 P2.
+        "--only",
+        "claude_code",
+      ],
       {
         stdio: ["ignore", "ignore", "ignore"],
         // HIVEMIND_CAPTURE=false: the spawned mine-local would otherwise
@@ -153,11 +166,21 @@ export function runInstallScan(): Promise<LocalManifestEntry | null> {
       // After mine-local exits cleanly, the manifest is written. Read
       // the latest insight-bearing entry; null if the gate produced no
       // insights (rare but expected for sparse session sets).
-      try {
-        finish(getLatestInsightEntry());
-      } catch {
-        finish(null);
+      let entry: LocalManifestEntry | null = null;
+      try { entry = getLatestInsightEntry(); } catch { /* keep null */ }
+      if (!entry) {
+        // mine-local writes a sentinel manifest (often with
+        // `entries: []`) even when no insights were produced. That
+        // sentinel is what `maybeAutoMineLocal()` uses to skip future
+        // background mining — leaving it behind permanently disables
+        // auto-mining for users whose install-time scan happened to
+        // be low-signal. Unlink the manifest so the background path
+        // can retry as their history accumulates. canOfferInstallScan
+        // guarantees there was no pre-existing manifest, so anything
+        // here came from THIS spawn — safe to remove. (codex PR #198 P1)
+        try { unlinkSync(manifestPath()); } catch { /* best-effort */ }
       }
+      finish(entry);
     });
 
     child.on("error", () => {

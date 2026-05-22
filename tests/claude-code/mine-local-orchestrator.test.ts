@@ -452,6 +452,39 @@ describe("runMineLocal: orchestrator branches", () => {
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("mine-local v1 requires the Claude Code CLI"));
   });
 
+  it("--only <agent> filters detectInstalledAgents to the requested agent", async () => {
+    // codex PR #198 P2 regression guard: the install-time scan
+    // advertises "scan your Claude Code sessions" but mine-local
+    // walks every installed agent by default. The --only flag scopes
+    // the picker so the prompt copy is honest.
+    const old = Date.now() - 5 * 60_000;
+    detectInstalledAgents.mockReturnValueOnce([
+      { agent: "codex", sessionRoot: "/c", encodeCwd: () => "x" },
+      { agent: "claude_code", sessionRoot: "/cc", encodeCwd: () => "x" },
+    ]);
+    // listLocalSessions should be called with ONLY the claude_code
+    // install when --only claude_code is passed.
+    listLocalSessions.mockImplementationOnce((installs: any) => {
+      expect(installs).toHaveLength(1);
+      expect(installs[0].agent).toBe("claude_code");
+      return [makeSession("a", old, "claude_code")];
+    });
+    const mod = await importOrch();
+    await mod.runMineLocal(["--only", "claude_code", "--dry-run"]);
+    // Confirm the log mentions the filter so users can see what
+    // happened.
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("filtered to claude_code"));
+  });
+
+  it("--only <agent> with no matching install → exit 1 with clear error", async () => {
+    detectInstalledAgents.mockReturnValueOnce([
+      { agent: "codex", sessionRoot: "/c", encodeCwd: () => "x" },
+    ]);
+    const mod = await importOrch();
+    await expect(mod.runMineLocal(["--only", "claude_code"])).rejects.toThrow("__exit_1__");
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("No 'claude_code' session directory detected"));
+  });
+
   it("host = codex but claude_code installed → mining uses claude_code as gate", async () => {
     const old = Date.now() - 5 * 60_000;
     detectHostAgent.mockReturnValueOnce("codex");

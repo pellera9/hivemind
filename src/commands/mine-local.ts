@@ -478,6 +478,7 @@ async function runMineLocalImpl(args: string[]): Promise<void> {
   const force = takeBoolFlag(work, "--force");
   const dryRun = takeBoolFlag(work, "--dry-run");
   const nRaw = takeFlagValue(work, "--n");
+  const onlyAgent = takeFlagValue(work, "--only");
 
   if (loadManifest() && !force) {
     console.error(`Local skills have already been mined on this machine.`);
@@ -486,12 +487,25 @@ async function runMineLocalImpl(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const installs = detectInstalledAgents();
-  if (installs.length === 0) {
+  const installsAll = detectInstalledAgents();
+  if (installsAll.length === 0) {
     console.error(`No agent session directories detected. Run a session first.`);
     process.exit(1);
   }
-  console.log(`Detected installed agents: ${installs.map(i => i.agent).join(", ")}`);
+  // Optional agent filter: scope mining to a single agent's sessions
+  // (e.g. `--only claude_code`). Used by the install-time scan to
+  // honor a "scan your Claude Code sessions" promise — without this
+  // filter, the picker walks every installed agent's sessions and
+  // could surface an insight from Codex / Cursor / etc when only
+  // Claude Code was advertised (codex PR #198 P2 finding).
+  const installs = onlyAgent
+    ? installsAll.filter(i => i.agent === onlyAgent)
+    : installsAll;
+  if (installs.length === 0) {
+    console.error(`No '${onlyAgent}' session directory detected. Skipping mine-local.`);
+    process.exit(1);
+  }
+  console.log(`Detected installed agents: ${installs.map(i => i.agent).join(", ")}${onlyAgent ? ` (filtered to ${onlyAgent})` : ""}`);
 
   const host = detectHostAgent();
   const fallback = installs[0].agent;
