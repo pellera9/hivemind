@@ -1,30 +1,30 @@
 ---
 name: hivemind-goals
-description: Read team goals + KPIs from the Deeplake VFS (openclaw is read-only — goal creation/editing happens from claude-code / codex / cursor / hermes).
-allowed-tools: hivemind_search, hivemind_read, hivemind_index
+description: Create, track, and read team goals + KPIs via Hivemind from openclaw. Use whenever the user mentions a goal, objective, KPI, target, milestone, or asks to track progress on something measurable.
+allowed-tools: hivemind_search, hivemind_read, hivemind_index, hivemind_goal_add, hivemind_kpi_add
 ---
 
-# Hivemind Goals — read-only consumer
+# Hivemind Goals (openclaw)
 
-OpenClaw exposes only `hivemind_search`, `hivemind_read`, and `hivemind_index` — there is no Write tool here, so this agent CANNOT create or edit goals. Goal authoring happens from claude-code / codex / cursor / hermes; openclaw only surfaces them.
+OpenClaw exposes purpose-built tools for goals + KPIs. Use them directly — do NOT try to write files via the host filesystem.
 
-Use this skill when the user asks "what are my goals?", "show me open goals", or wants to recall context about a previously tracked objective.
+## Tools
 
-## Where goals live
+- `hivemind_goal_add({ text })` — create a new goal. Returns `goal_id` (UUID). Status starts at `opened`.
+- `hivemind_kpi_add({ goal_id, kpi_id, target, unit, name? })` — add a KPI to an existing goal. Only call when the user explicitly asks for KPIs; do NOT auto-generate.
+- `hivemind_search({ query })` — search Hivemind shared memory (summaries + sessions). Use this when the user asks "what's already there" before creating a duplicate.
+- `hivemind_read({ path })` — read the full content of a specific Hivemind path.
+- `hivemind_index({})` — list everything in memory.
 
-Goals are markdown files under `~/.deeplake/memory/goal/<owner>/<status>/<goal_id>.md`. KPIs under `~/.deeplake/memory/kpi/<goal_id>/<kpi_id>.md`.
+## Workflow when the user expresses a goal
 
-- `<owner>` = userName of the goal owner
-- `<status>` ∈ {opened, in_progress, closed}
-- `<goal_id>` = UUIDv4
-- KPI body convention: first line = name, then `target: N`, `current: N`, `unit: <s>`
+1. (Optional) `hivemind_search` first to surface any existing related goal.
+2. `hivemind_goal_add({ text: "<short description>" })` — capture the returned `goal_id`.
+3. ONLY if the user asks for KPIs: `hivemind_kpi_add` once per KPI with `goal_id` + `kpi_id` (short slug like `k-prs`) + `target` (positive int) + `unit`.
+4. Confirm to the user with the goal_id and that the goal is team-visible.
 
-## How to find goals
+## What NOT to do
 
-1. `hivemind_index` for a quick overview of recent memory updates (goals + everything else).
-2. `hivemind_search` with the user's keywords to surface relevant goal files.
-3. `hivemind_read` on the matching `goal/<…>/<id>.md` and `kpi/<id>/<kid>.md` paths to read the bodies.
-
-## What to tell the user
-
-If they want to CREATE / MODIFY a goal, tell them this agent is read-only and they should do it from claude-code, codex, cursor, or hermes (where the VFS Write path routes to the `hivemind_goals` table).
+- Do NOT write files anywhere under `~/.deeplake/memory/`. OpenClaw's runtime does not route filesystem writes to the Deeplake tables — only the `hivemind_*` tools above do.
+- Do NOT call `hivemind_kpi_add` unsolicited. Wait for the user to ask.
+- Do NOT use `hivemind_search` to *create* anything — it's read-only.
