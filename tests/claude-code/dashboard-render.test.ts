@@ -248,6 +248,27 @@ describe("renderDashboardHtml", () => {
     expect(html).toContain("Run a session to start tracking");
   });
 
+  it("shows 'Local (this machine)' sub when source=local (no creds, local-only KPIs)", () => {
+    // CodeRabbit nitpick on PR #194: source=org and source=none were
+    // covered; the local-fallback branch wasn't asserted directly.
+    const html = renderDashboardHtml(baseData({
+      kpis: {
+        tokensSaved: 5000,
+        tokensSource: "local",
+        skillsCreated: 2,
+        memorySearches: 10,
+        sessionsCount: 3,
+        userTokensSaved: 5000,
+      },
+    }));
+    expect(html).toContain("~5.0k");
+    expect(html).toContain("Local (this machine)");
+    // Other cards should also reflect the local source label.
+    expect(html).toContain("Local");
+    // And the "Org-wide" copy must NOT appear in local mode.
+    expect(html).not.toContain("Org-wide");
+  });
+
   it("renders graph empty-state when data.graph is null", () => {
     const html = renderDashboardHtml(baseData({ graph: null }));
     expect(html).toContain("No graph snapshot yet for this repo.");
