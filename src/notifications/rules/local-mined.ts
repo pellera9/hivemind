@@ -25,6 +25,24 @@
 
 import type { Rule } from "../types.js";
 
+/**
+ * Maximum length for the rendered insight line. Picked empirically:
+ * ~90 chars fits two terminal-line-wraps at typical widths, which keeps
+ * the banner compact. Long gate outputs (haiku tends to over-explain)
+ * get cut at a word boundary with an ellipsis so the cut doesn't land
+ * mid-word.
+ */
+const MAX_INSIGHT_CHARS = 90;
+
+function truncateInsight(raw: string): string {
+  const cleaned = raw.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= MAX_INSIGHT_CHARS) return cleaned;
+  const slice = cleaned.slice(0, MAX_INSIGHT_CHARS - 1);
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace > MAX_INSIGHT_CHARS / 2 ? lastSpace : MAX_INSIGHT_CHARS - 1;
+  return slice.slice(0, cut).trimEnd() + "…";
+}
+
 export const localMinedRule: Rule = {
   id: "local-mined-surfaced",
   trigger: "session_start",
@@ -42,17 +60,18 @@ export const localMinedRule: Rule = {
       : "";
     if (latestInsightEntry && insight.length > 0) {
       const name = latestInsightEntry.skill_name;
+      // Three indented, emoji-prefixed lines: what we found, the artifact,
+      // the action. Each line is independently scannable so the user
+      // doesn't have to read prose to extract the takeaway. format.ts
+      // prepends 🐝 to the title; the title itself stays icon-free.
       return {
         id: "local-mined-surfaced",
         severity: "info",
-        // format.ts prepends the severity icon (info → 🐝), so the title
-        // itself stays icon-free — otherwise the rendered line shows
-        // "🐝 🐝 Hivemind found..." (two bees, one from format, one from us).
         title: `Hivemind found a pattern in your past sessions`,
         body:
-          `${insight}\n` +
-          `Minted skill \`${name}\` to catch it next time — try \`claude -p '/${name} <your prompt>'\`.\n` +
-          `Run 'hivemind login' to keep these skills across machines and share with your team.`,
+          `   📌 ${truncateInsight(insight)}\n` +
+          `   ✨ Skill \`${name}\` ready to catch it next time\n` +
+          `   🔐 Run \`hivemind login\` to share with your team`,
         // Dedup on the entry's identity so a new insight refires next
         // session, while a re-run with the same entry still dedupes.
         dedupKey: { skill_name: name, created_at: latestInsightEntry.created_at },
