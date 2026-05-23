@@ -41,8 +41,6 @@ const VALID_CONFIG = {
   sessionsTableName: "sessions",
   skillsTableName: "skills",
   rulesTableName: "hivemind_rules",
-  tasksTableName: "hivemind_tasks",
-  taskEventsTableName: "hivemind_task_events",
   memoryPath: "/tmp/mem",
 };
 
@@ -108,51 +106,39 @@ describe("runContextCommand — requires login", () => {
 // ── output ──────────────────────────────────────────────────────────────────
 
 describe("runContextCommand — output", () => {
-  it("prints the rendered block to stdout when there's something to show", async () => {
-    // Renderer queries: listRules, listTasks team, listTasks mine,
-    // computeAllForTasks (skipped if no tasks).
+  it("prints the rendered rules block to stdout when there's something to show", async () => {
+    // Renderer query: listRules only (tasks/events are gone).
     queryMock.mockResolvedValueOnce([{
       id: "row-1", rule_id: "rule-1", text: "no DROP TABLE on prod",
       scope: "team", status: "active", assigned_by: "alice@activeloop.ai",
       version: 1, created_at: "2026-05-20T10:00:00Z",
       agent: "manual", plugin_version: "0.7.99",
     }]);
-    queryMock.mockResolvedValueOnce([]);   // team tasks empty
-    queryMock.mockResolvedValueOnce([]);   // mine tasks empty
     await runContextCommand([]);
     expect(logged.some(l => l.includes("HIVEMIND RULES"))).toBe(true);
     expect(logged.some(l => l.includes("no DROP TABLE on prod"))).toBe(true);
-    // 3 SELECTs total (rules + team + mine; events skipped because tasks empty).
-    expect(queryMock).toHaveBeenCalledTimes(3);
+    // Exactly one SELECT (rules only).
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
   it("empty state: prints diagnostic to STDERR (stdout stays empty so callers can pipe cleanly)", async () => {
-    // All three reads return [] → renderer returns "" → CLI prints
-    // diagnostic to stderr, NOTHING to stdout. A caller doing
-    // `hivemind context | otherTool` gets empty stdin (the documented
-    // signal that there's nothing to inject).
-    queryMock.mockResolvedValueOnce([]);
-    queryMock.mockResolvedValueOnce([]);
+    // listRules returns [] → renderer returns "" → CLI prints diagnostic
+    // to stderr, NOTHING to stdout. A caller doing `hivemind context |
+    // otherTool` gets empty stdin (the documented "nothing to inject"
+    // signal).
     queryMock.mockResolvedValueOnce([]);
     await runContextCommand([]);
     expect(logged).toEqual([]);
-    expect(erred.some(l => l.includes("(no active rules or visible tasks)"))).toBe(true);
+    expect(erred.some(l => l.includes("(no active rules)"))).toBe(true);
   });
 
-  it("uses the configured table names from cfg (not hardcoded)", async () => {
+  it("uses the configured rules table name from cfg (not hardcoded)", async () => {
     loadConfigMock.mockReturnValueOnce({
       ...VALID_CONFIG,
       rulesTableName: "rules_test",
-      tasksTableName: "tasks_test",
-      taskEventsTableName: "events_test",
     });
     queryMock.mockResolvedValueOnce([]);
-    queryMock.mockResolvedValueOnce([]);
-    queryMock.mockResolvedValueOnce([]);
     await runContextCommand([]);
-    // First query should target the configured rules table.
     expect(queryMock.mock.calls[0][0]).toContain(`FROM "rules_test"`);
-    expect(queryMock.mock.calls[1][0]).toContain(`FROM "tasks_test"`);
-    expect(queryMock.mock.calls[2][0]).toContain(`FROM "tasks_test"`);
   });
 });
