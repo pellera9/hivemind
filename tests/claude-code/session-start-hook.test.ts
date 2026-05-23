@@ -119,6 +119,7 @@ const validConfig = {
   // T6 fields — needed so the renderer's sqlIdent doesn't render
   // FROM "undefined" when the mock loadConfig is consulted.
   rulesTableName: "hivemind_rules",
+  goalsTableName: "hivemind_goals",
   skillsTableName: "skills",
 };
 
@@ -216,22 +217,21 @@ describe("session-start hook — placeholder branching", () => {
     expect(ensureTableMock).toHaveBeenCalled();
     expect(ensureSessionsTableMock).toHaveBeenCalledWith("sessions");
     // 1 SELECT (existing-summary check) + 1 INSERT (placeholder)
-    // + 1 renderer SELECT (listRules) = 3 queries. The tasks system
-    // was removed; the renderer no longer queries hivemind_tasks /
-    // hivemind_task_events.
-    expect(queryMock).toHaveBeenCalledTimes(3);
+    // + 2 renderer SELECTs (listRules + listOpenGoals) = 4 queries.
+    expect(queryMock).toHaveBeenCalledTimes(4);
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT path FROM/);
     expect(queryMock.mock.calls[1][0]).toMatch(/^INSERT INTO/);
     expect(queryMock.mock.calls[2][0]).toMatch(/^SELECT .* FROM "hivemind_rules"/);
+    expect(queryMock.mock.calls[3][0]).toMatch(/^SELECT .* FROM "hivemind_goals"/);
     expect(debugLogMock).toHaveBeenCalledWith("placeholder created");
   });
 
   it("skips placeholder INSERT when summary already exists (resumed session)", async () => {
     queryMock.mockResolvedValueOnce([{ path: "/summaries/alice/sid-1.md" }]);
     await runHook();
-    // 1 placeholder SELECT (returns row, no INSERT) + 1 renderer SELECT
-    // (rules only) = 2 queries.
-    expect(queryMock).toHaveBeenCalledTimes(2);
+    // 1 placeholder SELECT (returns row, no INSERT) + 2 renderer SELECTs
+    // (rules + goals) = 3 queries.
+    expect(queryMock).toHaveBeenCalledTimes(3);
   });
 
   it("non-empty rules block is appended to additionalContext", async () => {
@@ -248,6 +248,7 @@ describe("session-start hook — placeholder branching", () => {
     queryMock.mockResolvedValueOnce([]);     // placeholder SELECT
     queryMock.mockResolvedValueOnce([]);     // placeholder INSERT
     queryMock.mockResolvedValueOnce([rule]); // renderer rules
+    queryMock.mockResolvedValueOnce([]);     // renderer goals (empty)
     const out = await runHook();
     expect(out).toBeTruthy();
     const parsed = JSON.parse(out!);
@@ -262,10 +263,12 @@ describe("session-start hook — placeholder branching", () => {
     // INSERT. The renderer runs unconditionally because it's read-only.
     expect(ensureTableMock).not.toHaveBeenCalled();
     expect(ensureSessionsTableMock).not.toHaveBeenCalled();
-    // 1 renderer SELECT (rules only). The rules table is lazy-created
-    // by the CLI write path; SessionStart never DDL-touches it.
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    // 2 renderer SELECTs (rules + goals). Both tables are lazy-created
+    // by their respective CLI / VFS write paths; SessionStart never
+    // DDL-touches them.
+    expect(queryMock).toHaveBeenCalledTimes(2);
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT .* FROM "hivemind_rules"/);
+    expect(queryMock.mock.calls[1][0]).toMatch(/^SELECT .* FROM "hivemind_goals"/);
     expect(debugLogMock).toHaveBeenCalledWith(
       "placeholder + schema ensure skipped (HIVEMIND_CAPTURE=false)",
     );

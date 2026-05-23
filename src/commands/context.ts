@@ -63,6 +63,7 @@ export async function runContextCommand(args: string[]): Promise<void> {
     (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>,
     {
       rulesTable: cfg.rulesTableName,
+      goalsTable: cfg.goalsTableName,
       currentUser: cfg.userName,
     },
   );
@@ -72,7 +73,7 @@ export async function runContextCommand(args: string[]): Promise<void> {
     // way the user-facing message is the same: nothing to print.
     // Print to stderr so a caller pipe-ing the output gets an empty
     // stdout (the documented "nothing to inject" signal).
-    console.error("(no active rules)");
+    console.error("(no active rules or open goals)");
     return;
   }
 

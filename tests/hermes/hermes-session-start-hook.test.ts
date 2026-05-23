@@ -48,6 +48,7 @@ const validConfig = {
   // T6 fields — needed so the renderer's sqlIdent doesn't render
   // FROM "undefined" when the mock loadConfig is consulted.
   rulesTableName: "hivemind_rules",
+  goalsTableName: "hivemind_goals",
   skillsTableName: "skills",
 };
 
@@ -104,7 +105,7 @@ describe("hermes session-start hook — placeholder creation", () => {
     queryMock.mockResolvedValueOnce([]); // INSERT
     await runHook();
     // 2 placeholder + 1 renderer (rules only) = 3.
-    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect(queryMock).toHaveBeenCalledTimes(4);
     const insertSql = queryMock.mock.calls[1][0] as string;
     expect(insertSql).toMatch(/INSERT INTO "memory"/);
     expect(insertSql).toContain("'hermes'");
@@ -115,7 +116,7 @@ describe("hermes session-start hook — placeholder creation", () => {
     queryMock.mockResolvedValueOnce([{ path: "/summaries/alice/ses-1.md" }]);
     await runHook();
     // 1 placeholder SELECT + 1 renderer (rules only) = 2.
-    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(queryMock).toHaveBeenCalledTimes(3);
   });
 
   it("skipped entirely when no token", async () => {
@@ -135,7 +136,7 @@ describe("hermes session-start hook — placeholder creation", () => {
     // #193 flagged the original count-only check as insufficient.
     expect(ensureTableMock).not.toHaveBeenCalled();
     expect(ensureSessionsTableMock).not.toHaveBeenCalled();
-    expect(queryMock).toHaveBeenCalledTimes(1); // rules only
+    expect(queryMock).toHaveBeenCalledTimes(2); // rules + goals
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT .* FROM "hivemind_rules"/);
   });
 

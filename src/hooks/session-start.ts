@@ -209,6 +209,7 @@ async function main(): Promise<void> {
           (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>,
           {
             rulesTable: config.rulesTableName,
+            goalsTable: config.goalsTableName,
             currentUser: config.userName,
           },
           { log },
