@@ -22,7 +22,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findAgentBin } from "../skillify/gate-runner.js";
@@ -30,6 +30,7 @@ import {
   getLatestInsightEntry,
   type LocalManifestEntry,
 } from "../skillify/local-manifest.js";
+import { runAdvisor } from "../skillify/advisor.js";
 
 /**
  * Path roots are resolved at CALL time, not module-load time, so the
@@ -45,22 +46,27 @@ function manifestPath(): string {
 }
 
 /**
- * Hard cap on the synchronous scan during install. Haiku on ~3 sessions
- * typically returns in 30-60s; 90s is the generous ceiling before we
- * give up and fall through. Don't bump higher without UX consideration —
- * a 90s wait already pushes the install latency well past the user's
- * normal "what's happening?" patience.
+ * Hard cap on the synchronous scan during install. With session count
+ * = 20 and concurrency = 4, haiku runs 5 sequential batches at ~30-60s
+ * each → realistic wall clock 150-300s. 5 minutes is the ceiling
+ * before we give up and fall through. The user opted into the wait
+ * via the y/n prompt, so a long-but-bounded scan is acceptable; the
+ * alternative (3-5 sessions) was empirically too few to escape the
+ * recency-biased picker's tendency to pick conversational meta-
+ * sessions on machines with rich history.
  */
-const SCAN_TIMEOUT_MS = 90_000;
+const SCAN_TIMEOUT_MS = 300_000;
 
 /**
- * Sessions to mine on the install-time pass. Tighter than the default
- * (8) because we're trading insight quality for install latency. Three
- * is empirically enough to surface a pattern for users with active
- * coding history; for users with very few sessions, the gate returns
- * empty and we fall through.
+ * Sessions to mine on the install-time pass. Bumped from 5 → 20 after
+ * real-world testing: on a machine with ~340 sessions where the newest
+ * dozen are all conversational/planning content (no coding mistakes),
+ * --n 5 returned zero insights. The picker uses epsilon-greedy
+ * (ε=0.3) so ~6 of 20 picks are random — high enough to reach back
+ * into history and surface actual coding sessions where real
+ * repeatable-mistake patterns live.
  */
-const INSTALL_SCAN_SESSION_COUNT = 3;
+const INSTALL_SCAN_SESSION_COUNT = 20;
 
 /**
  * Cheap top-level scan: does any `~/.claude/projects/*` subdir contain
@@ -68,6 +74,24 @@ const INSTALL_SCAN_SESSION_COUNT = 3;
  * mine-local worker has its own session picker, this guard only needs
  * to answer "is there anything to mine?".
  */
+/**
+ * Read the manifest mine-local just wrote and return true ONLY when
+ * the entries array is empty. Distinguishes the "no skills written"
+ * sentinel from a count-only mine (skills written, none with insight).
+ * Returns false on any read/parse error to be safe — better to leave
+ * a malformed file alone than delete real data we couldn't decode.
+ */
+function manifestIsTrulyEmpty(): boolean {
+  const p = manifestPath();
+  if (!existsSync(p)) return false;
+  try {
+    const m = JSON.parse(readFileSync(p, "utf-8")) as { entries?: unknown };
+    return Array.isArray(m.entries) && m.entries.length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function hasLocalClaudeSessions(): boolean {
   const projectsDir = claudeProjectsDir();
   if (!existsSync(projectsDir)) return false;
@@ -160,24 +184,34 @@ export function runInstallScan(): Promise<LocalManifestEntry | null> {
       finish(null);
     }, SCAN_TIMEOUT_MS);
 
-    child.on("close", (code: number | null) => {
+    child.on("close", async (code: number | null) => {
       clearTimeout(timer);
       if (code !== 0) { finish(null); return; }
-      // After mine-local exits cleanly, the manifest is written. Read
-      // the latest insight-bearing entry; null if the gate produced no
-      // insights (rare but expected for sparse session sets).
+      // After mine-local exits cleanly, the manifest is written. Run
+      // the advisor (sonnet) over all insight-bearing candidates to
+      // mark the BEST one as primary. The A/B comparison showed a
+      // significant jump in surfaced-insight quality with the advisor
+      // pass: it consistently rejects meta-noise / vague candidates
+      // and picks the most concrete + counted finding. Falls through
+      // silently on any advisor error (timeout, no claude CLI, sonnet
+      // rejects all) — getLatestInsightEntry just uses the recency
+      // tiebreak.
+      try { await runAdvisor(); } catch { /* fall through to recency pick */ }
       let entry: LocalManifestEntry | null = null;
       try { entry = getLatestInsightEntry(); } catch { /* keep null */ }
-      if (!entry) {
-        // mine-local writes a sentinel manifest (often with
-        // `entries: []`) even when no insights were produced. That
-        // sentinel is what `maybeAutoMineLocal()` uses to skip future
-        // background mining — leaving it behind permanently disables
-        // auto-mining for users whose install-time scan happened to
-        // be low-signal. Unlink the manifest so the background path
-        // can retry as their history accumulates. canOfferInstallScan
-        // guarantees there was no pre-existing manifest, so anything
-        // here came from THIS spawn — safe to remove. (codex PR #198 P1)
+      if (!entry && manifestIsTrulyEmpty()) {
+        // ONLY delete the manifest when mine-local wrote a literal
+        // empty sentinel (entries: []). When mine-local DID produce
+        // skills but the gate omitted `insight` on all of them, the
+        // manifest still has value — countLocalManifestEntries() will
+        // surface the count via the legacy SessionStart banner branch,
+        // and a future `push-local` flow needs the row metadata. The
+        // earlier blanket-unlink path was over-aggressive (codex
+        // PR #198 P2): it told users "no patterns found" even when
+        // skills had been written, and re-armed the background auto-
+        // mine for the next session unnecessarily. canOfferInstallScan
+        // guarantees there was no pre-existing manifest, so an empty
+        // sentinel here is definitively from THIS spawn.
         try { unlinkSync(manifestPath()); } catch { /* best-effort */ }
       }
       finish(entry);
@@ -202,8 +236,12 @@ export function runInstallScan(): Promise<LocalManifestEntry | null> {
  */
 export function formatScanResult(entry: LocalManifestEntry): string {
   const rawInsight = (entry.insight ?? "").replace(/\s+/g, " ").trim();
-  const insight = rawInsight.length > 200
-    ? rawInsight.slice(0, 197).replace(/\s\S*$/, "") + "…"
+  // Cap at 280 chars (same as the parseMultiVerdict storage cap), so we
+  // never truncate beyond what was persisted. The earlier 200-char cap
+  // sometimes lost the punchline of haiku's insights mid-sentence —
+  // 280 is the longest a stored insight can ever be.
+  const insight = rawInsight.length > 280
+    ? rawInsight.slice(0, 277).replace(/\s\S*$/, "") + "…"
     : rawInsight;
   return (
     `✓ Found a pattern in your past sessions:\n` +

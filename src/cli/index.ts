@@ -191,16 +191,18 @@ async function runAuthGate(args: string[]): Promise<void> {
   // install never dead-ends on a scan failure.
   let foundInsight: { skill_name: string } | null = null;
   if (canOfferInstallScan()) {
+    // Don't claim "Hivemind installed" here — runAuthGate runs BEFORE
+    // the per-platform installers, so the assistant install hasn't
+    // actually happened yet. Codex PR #198 P3 flagged the earlier
+    // wording as misleading status output.
     log("");
-    log("🐝 Hivemind installed.");
-    log("");
-    log("Want me to scan your recent Claude Code sessions for repeatable mistakes?");
-    log("Takes ~30s. The scan uses your Claude Code subscription.");
+    log("🐝 Want me to scan your recent Claude Code sessions for repeatable mistakes?");
+    log("Takes 2-5 minutes. Scans 20 sessions in parallel using your Claude Code subscription.");
     log("");
     const scanOk = await confirm("Scan now?", true);
     if (scanOk) {
       log("");
-      log("Scanning your last 3 sessions (up to 90s)…");
+      log("Scanning your 20 most-recent sessions (up to 5 min). Be patient — haiku is running in the background.");
       const entry = await runInstallScan();
       if (entry && entry.insight && entry.insight.trim().length > 0) {
         log("");

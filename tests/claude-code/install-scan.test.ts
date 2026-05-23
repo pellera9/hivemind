@@ -71,6 +71,14 @@ vi.mock("../../src/skillify/local-manifest.js", async (importOriginal) => {
   };
 });
 
+// runAdvisor is mocked so install-scan tests stay focused on install-scan
+// behavior. The advisor itself is tested in advisor.test.ts. Without this
+// mock, every install-scan test would also exercise the advisor's spawn,
+// inflating spawnCalls and breaking length assertions.
+vi.mock("../../src/skillify/advisor.js", () => ({
+  runAdvisor: vi.fn(async () => null),
+}));
+
 import {
   canOfferInstallScan,
   formatScanResult,
@@ -153,7 +161,7 @@ describe("canOfferInstallScan", () => {
 });
 
 describe("runInstallScan", () => {
-  it("spawns `skillify mine-local --n 3 --only claude_code` against the same CLI bundle the install ran from", async () => {
+  it("spawns `skillify mine-local --n 20 --only claude_code` against the same CLI bundle the install ran from", async () => {
     nextChildBehavior = { exitCode: 0 };
     await runInstallScan();
     expect(spawnCalls).toHaveLength(1);
@@ -164,9 +172,12 @@ describe("runInstallScan", () => {
     expect(args[0]).toBe(FAKE_CLI);
     expect(args).toContain("skillify");
     expect(args).toContain("mine-local");
-    // `--n 3` is the tight install-time session cap (vs default 8).
+    // `--n 20` is the install-time session cap. Bumped 3 → 5 → 20
+    // across iterations: the recency-biased picker on a machine with
+    // many recent conversational sessions needs the epsilon-greedy
+    // random tail (30% of picks) to actually reach coding sessions.
     expect(args).toContain("--n");
-    expect(args[args.indexOf("--n") + 1]).toBe("3");
+    expect(args[args.indexOf("--n") + 1]).toBe("20");
     // `--only claude_code` honors the "scan your Claude Code sessions"
     // copy — without it, mine-local would walk every installed agent
     // and could surface an insight from Codex / Cursor (codex PR #198
@@ -175,20 +186,43 @@ describe("runInstallScan", () => {
     expect(args[args.indexOf("--only") + 1]).toBe("claude_code");
   });
 
-  it("deletes the manifest written by mine-local when no insight was produced (P1 guard)", async () => {
+  it("deletes the manifest when mine-local wrote a literal empty sentinel (entries: [])", async () => {
     // codex PR #198 P1: mine-local writes a sentinel manifest even
-    // when 0 insights were found. That sentinel permanently disables
+    // when 0 SKILLS were found. That sentinel permanently disables
     // future maybeAutoMineLocal() runs. We unlink it so background
     // mining can retry as history accumulates.
     const manifestPath = join(TMP_HOME, ".claude", "hivemind", "local-mined.json");
     mkdirSync(join(TMP_HOME, ".claude", "hivemind"), { recursive: true });
     writeFileSync(manifestPath, JSON.stringify({ created_at: "x", entries: [] }));
     nextChildBehavior = { exitCode: 0 };
-    nextInsightEntry = null;  // mine-local wrote the empty manifest
+    nextInsightEntry = null;
     const result = await runInstallScan();
     expect(result).toBeNull();
-    // Manifest must be gone so future background auto-mine can retry.
+    // Manifest is gone — background auto-mine can retry.
     expect(existsSyncReal(manifestPath)).toBe(false);
+  });
+
+  it("PRESERVES the manifest when mine-local wrote skills but none have an insight (codex P2)", async () => {
+    // codex PR #198 P2: the prior fix was over-aggressive. When
+    // mine-local writes skills (entries.length > 0) but the gate
+    // omits `insight` on every one of them, we MUST NOT delete the
+    // manifest — countLocalManifestEntries() surfaces the count via
+    // the legacy SessionStart banner branch, and a future
+    // `push-local` needs the row metadata. Only the literal
+    // `entries: []` sentinel should be cleared.
+    const manifestPath = join(TMP_HOME, ".claude", "hivemind", "local-mined.json");
+    mkdirSync(join(TMP_HOME, ".claude", "hivemind"), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({
+      created_at: "x",
+      entries: [
+        { skill_name: "a", canonical_path: "/x", symlinks: [], source_session_ids: [], source_session_paths: [], source_agent: "claude_code", gate_agent: "claude_code", created_at: "2026-05-22T00:00:00.000Z", uploaded: false },
+      ],
+    }));
+    nextChildBehavior = { exitCode: 0 };
+    nextInsightEntry = null;  // no insight produced, but skills exist
+    const result = await runInstallScan();
+    expect(result).toBeNull();
+    expect(existsSyncReal(manifestPath)).toBe(true);
   });
 
   it("preserves the manifest when an insight WAS produced", async () => {
@@ -202,8 +236,6 @@ describe("runInstallScan", () => {
     nextInsightEntry = { skill_name: "k", insight: "i", created_at: "z" };
     const result = await runInstallScan();
     expect(result).not.toBeNull();
-    // Real manifest should still be there — we want the insight to
-    // persist for the user-visible banner on next SessionStart.
     expect(existsSyncReal(manifestPath)).toBe(true);
   });
 
@@ -278,14 +310,18 @@ describe("formatScanResult", () => {
     expect(out).not.toContain("\t");
   });
 
-  it("truncates insight over 200 chars at a word boundary with ellipsis", () => {
-    const long = "x ".repeat(200).trim() + " end-marker";
+  it("truncates insight over 280 chars at a word boundary with ellipsis", () => {
+    // 280-char cap matches the parseMultiVerdict storage cap, so the
+    // renderer never truncates beyond what the manifest can store.
+    // Bumped from 200 → 280 after a real-world test caught a haiku
+    // insight mid-sentence at 200; 280 gives haiku room to finish a
+    // single sentence with the punchline intact.
+    const long = "x ".repeat(280).trim() + " end-marker";
     const out = formatScanResult(makeEntry(long));
     const insightLine = out.split("\n").find(l => l.includes("📌"))!;
-    // Allow a few chars of slack for the emoji + leading spaces.
-    expect(insightLine.length).toBeLessThanOrEqual(220);
+    // Allow ~10 chars of slack for the emoji + leading spaces.
+    expect(insightLine.length).toBeLessThanOrEqual(295);
     expect(insightLine.endsWith("…")).toBe(true);
-    // end-marker is past the 200-char cap, must be dropped.
     expect(insightLine).not.toContain("end-marker");
   });
 

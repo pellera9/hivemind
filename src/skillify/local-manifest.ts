@@ -45,6 +45,14 @@ export interface LocalManifestEntry {
    * and fall back to the count-only banner.
    */
   insight?: string;
+  /**
+   * Set to true by the advisor pass when this entry is the chosen "best"
+   * insight to surface. The advisor (sonnet) ranks all insight-bearing
+   * entries from a mining run by quality (concrete, quantified, non-meta)
+   * and marks the winner. `getLatestInsightEntry` prefers primary entries
+   * over the recency tiebreak when present.
+   */
+  primary?: boolean;
 }
 
 export interface LocalManifest {
@@ -132,20 +140,27 @@ export function getLatestInsightEntry(
     if (Number.isFinite(ts) && ts > newestTs) newestTs = ts;
   }
   if (!Number.isFinite(newestTs)) return null;
-  // Second pass: pick the newest insight-bearing entry within the
-  // latest-run window. Date.parse handles timezone-offset variants;
-  // unparseable created_at rows are skipped so a single malformed
-  // entry can't shadow valid ones.
+  // Second pass: pick the best insight-bearing entry within the
+  // latest-run window. Preference order:
+  //   1. `primary: true` entries (advisor marked these as the best
+  //      among the run's candidates by quality criteria)
+  //   2. otherwise, the newest by created_at
+  // Date.parse handles timezone-offset variants; unparseable created_at
+  // rows are skipped so a single malformed entry can't shadow valid ones.
   let best: LocalManifestEntry | null = null;
   let bestTs = Number.NEGATIVE_INFINITY;
+  let bestIsPrimary = false;
   for (const e of m.entries) {
     if (!e || typeof e.insight !== "string" || e.insight.trim().length === 0) continue;
     const ts = Date.parse(e.created_at ?? "");
     if (!Number.isFinite(ts)) continue;
     if (newestTs - ts > LATEST_RUN_WINDOW_MS) continue;
-    if (ts > bestTs) {
+    const isPrimary = e.primary === true;
+    // Primary entries always beat non-primary; among same-class, newer wins.
+    if (!best || (isPrimary && !bestIsPrimary) || (isPrimary === bestIsPrimary && ts > bestTs)) {
       best = e;
       bestTs = ts;
+      bestIsPrimary = isPrimary;
     }
   }
   return best;
