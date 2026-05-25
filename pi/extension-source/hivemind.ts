@@ -93,6 +93,52 @@ function loadCreds(): Creds | null {
   }
 }
 
+// Inline copies of decodeJwtPayload + healDriftedOrgToken (the shared helpers
+// live in src/commands/auth.ts, but pi extensions ship as raw .ts with no
+// shared-module imports — kept in lockstep with that file).
+function decodeJwtPayloadInline(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (payload.length % 4) payload += "=";
+    return JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
+  } catch { return null; }
+}
+
+async function healDriftedOrgTokenInline(creds: Creds): Promise<Creds> {
+  if (!creds.token || !creds.orgId) return creds;
+  const payload = decodeJwtPayloadInline(creds.token);
+  const claimOrg = payload && typeof payload.org_id === "string" ? payload.org_id : undefined;
+  if (!claimOrg || claimOrg === creds.orgId) return creds;
+  logHm(`session_start: token org drift detected: jwt.org_id=${claimOrg} creds.orgId=${creds.orgId} — re-minting`);
+  try {
+    const resp = await fetch(`${creds.apiUrl}/users/me/tokens`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: `deeplake-plugin-heal-${Date.now()}`,
+        duration: 365 * 24 * 3600,
+        organization_id: creds.orgId,
+      }),
+    });
+    if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+    const data = await resp.json() as { token: { token: string } };
+    const newToken = data.token.token;
+    // Read + merge + write the WHOLE creds file so we don't drop fields pi
+    // doesn't model (e.g. savedAt). Atomic via writeFileSync with mode 0o600.
+    const path = join(homedir(), ".deeplake", "credentials.json");
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    raw.token = newToken;
+    writeFileSync(path, JSON.stringify(raw, null, 2), { mode: 0o600 });
+    logHm(`session_start: token re-minted for org=${creds.orgId}`);
+    return { ...creds, token: newToken };
+  } catch (e: any) {
+    logHm(`session_start: token re-mint failed (continuing with stale token): ${e?.message ?? e}`);
+    return creds;
+  }
+}
+
 const MEMORY_TABLE = process.env.HIVEMIND_TABLE ?? "memory";
 const SESSIONS_TABLE = process.env.HIVEMIND_SESSIONS_TABLE ?? "sessions";
 
@@ -1076,11 +1122,12 @@ export default function hivemindExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event: any, _ctx: any) => {
     logHm(`session_start: fired (capture=${captureEnabled}, embed=${process.env.HIVEMIND_EMBEDDINGS !== "false"}, table=${SESSIONS_TABLE})`);
-    const creds = loadCreds();
+    let creds = loadCreds();
     if (!creds) {
       logHm(`session_start: no credentials at ~/.deeplake/credentials.json — capture disabled this session`);
     } else {
       logHm(`session_start: creds org=${creds.orgName ?? creds.orgId} ws=${creds.workspaceId}`);
+      creds = await healDriftedOrgTokenInline(creds);
     }
 
     // Centralized autoupdate: shells out to `hivemind update` (npm-based,

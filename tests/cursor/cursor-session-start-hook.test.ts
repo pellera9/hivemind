@@ -14,7 +14,10 @@ const localManifestMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: unknown[]) => stdinMock(...a) }));
 vi.mock("../../src/config.js", () => ({ loadConfig: (...a: unknown[]) => loadConfigMock(...a) }));
-vi.mock("../../src/commands/auth.js", () => ({ loadCredentials: (...a: unknown[]) => loadCredentialsMock(...a) }));
+vi.mock("../../src/commands/auth.js", () => ({
+  loadCredentials: (...a: unknown[]) => loadCredentialsMock(...a),
+  healDriftedOrgToken: async (creds: unknown) => creds,
+}));
 vi.mock("../../src/utils/debug.js", () => ({ log: (_tag: string, msg: string) => debugLogMock(msg) }));
 vi.mock("../../src/utils/version-check.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/utils/version-check.js")>();

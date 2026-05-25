@@ -175,7 +175,59 @@ export async function listOrgs(token: string, apiUrl = DEFAULT_API_URL): Promise
 export async function switchOrg(orgId: string, orgName?: string): Promise<void> {
   const creds = loadCredentials();
   if (!creds) throw new Error("Not logged in. Run deeplake login first.");
-  saveCredentials({ ...creds, orgId, orgName });
+  // Token in creds is org-bound (org_id claim baked in at mint time at
+  // /users/me/tokens). Re-mint against the destination org so the claim
+  // matches creds.orgId — otherwise anything that trusts the token claim
+  // instead of the X-Activeloop-Org-Id header resolves to the old org.
+  // Name suffix uses Date.now() (not the date) because Deeplake's
+  // /users/me/tokens rejects duplicate (user_id, name) with a misleading
+  // 500 — same hazard the heal path documents; two switches the same day
+  // would otherwise fail.
+  const apiUrl = creds.apiUrl ?? DEFAULT_API_URL;
+  const tokenName = `deeplake-plugin-switch-${Date.now()}`;
+  const tokenData = await apiPost("/users/me/tokens", {
+    name: tokenName,
+    duration: 365 * 24 * 3600,
+    organization_id: orgId,
+  }, creds.token, apiUrl) as { token: { token: string } };
+  saveCredentials({ ...creds, orgId, orgName, token: tokenData.token.token });
+}
+
+// Detect and repair the legacy regression where `org switch` only rewrote
+// orgId without re-minting the org-bound API token. Returns updated creds
+// when a heal happens, the input creds when nothing to do, and the input
+// creds (after logging) when the mint fails — never throws, never blocks
+// session start.
+export async function healDriftedOrgToken(
+  creds: Credentials,
+  log: (msg: string) => void = () => {},
+): Promise<Credentials> {
+  if (!creds.token || !creds.orgId) return creds;
+  const payload = decodeJwtPayload(creds.token);
+  const claimOrg = payload && typeof payload.org_id === "string" ? payload.org_id : undefined;
+  if (!claimOrg || claimOrg === creds.orgId) return creds;
+  log(`token org drift detected: jwt.org_id=${claimOrg} creds.orgId=${creds.orgId} — re-minting`);
+  try {
+    const apiUrl = creds.apiUrl ?? DEFAULT_API_URL;
+    // Per-mint unique name. Deeplake rejects duplicate (user_id, name) with
+    // a 500 ("token creation failed"), and the heal runs on EVERY session
+    // start across multiple agents — a date-only suffix would collide as
+    // soon as the second agent heals on the same day. Date.now() suffices:
+    // resolution is ms, only one heal per session, single process per agent.
+    const tokenName = `deeplake-plugin-heal-${Date.now()}`;
+    const tokenData = await apiPost("/users/me/tokens", {
+      name: tokenName,
+      duration: 365 * 24 * 3600,
+      organization_id: creds.orgId,
+    }, creds.token, apiUrl) as { token: { token: string } };
+    const healed = { ...creds, token: tokenData.token.token };
+    saveCredentials(healed);
+    log(`token re-minted for org=${creds.orgId}`);
+    return healed;
+  } catch (err) {
+    log(`token re-mint failed (continuing with stale token): ${(err as Error).message}`);
+    return creds;
+  }
 }
 
 // ── Workspace Commands ───────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ const localManifestMock = vi.fn();
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
 vi.mock("../../src/commands/auth.js", () => ({
   loadCredentials: (...a: any[]) => loadCredsMock(...a),
+  healDriftedOrgToken: async (creds: unknown) => creds,
 }));
 vi.mock("../../src/utils/debug.js", () => ({
   log: (_t: string, msg: string) => debugLogMock(msg),

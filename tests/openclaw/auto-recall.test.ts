@@ -36,6 +36,7 @@ vi.mock("../../src/commands/auth.js", () => ({
   switchOrg: vi.fn(),
   listWorkspaces: vi.fn().mockResolvedValue([]),
   switchWorkspace: vi.fn(),
+  healDriftedOrgToken: async (creds: unknown) => creds,
 }));
 vi.mock("../../src/deeplake-api.js", () => ({
   DeeplakeApi: class {
