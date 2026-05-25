@@ -255,21 +255,47 @@ describe("listOrgs / listWorkspaces", () => {
 });
 
 describe("switchOrg / switchWorkspace", () => {
-  it("switchOrg writes the new orgId+orgName to credentials", async () => {
-    loadCredentialsMock.mockReturnValue({ token: "tok", orgId: "old", savedAt: "x" });
+  it("switchOrg mints a new token bound to the destination org and persists it", async () => {
+    loadCredentialsMock.mockReturnValue({
+      token: "old-tok", orgId: "old", apiUrl: "https://api.example", savedAt: "x",
+    });
+    fetchMock.mockResolvedValueOnce(ok({ token: { token: "fresh-tok-for-new-org" } }));
     const { switchOrg } = await importAuth();
     await switchOrg("new-org", "Activeloop");
+
+    // Exactly one mint call, no extras.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.example/users/me/tokens");
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe("Bearer old-tok");
+    const body = JSON.parse(init.body);
+    expect(body.organization_id).toBe("new-org");
+    expect(body.duration).toBe(365 * 24 * 3600);
+
+    // Exactly one save, with rotated token + new org.
     expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
     const written = saveCredentialsMock.mock.calls[0][0];
     expect(written.orgId).toBe("new-org");
     expect(written.orgName).toBe("Activeloop");
-    expect(written.token).toBe("tok"); // preserved
+    expect(written.token).toBe("fresh-tok-for-new-org"); // rotated, not preserved
   });
 
-  it("switchOrg throws if not logged in", async () => {
+  it("switchOrg does NOT persist credentials when the mint call fails", async () => {
+    loadCredentialsMock.mockReturnValue({
+      token: "old-tok", orgId: "old", apiUrl: "https://api.example", savedAt: "x",
+    });
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+    const { switchOrg } = await importAuth();
+    await expect(switchOrg("new-org", "Activeloop")).rejects.toThrow(/API 403/);
+    expect(saveCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("switchOrg throws if not logged in and never hits the network", async () => {
     loadCredentialsMock.mockReturnValue(null);
     const { switchOrg } = await importAuth();
     await expect(switchOrg("new-org", "Activeloop")).rejects.toThrow(/Not logged in/);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(saveCredentialsMock).not.toHaveBeenCalled();
   });
 
@@ -285,6 +311,82 @@ describe("switchOrg / switchWorkspace", () => {
     loadCredentialsMock.mockReturnValue(null);
     const { switchWorkspace } = await importAuth();
     await expect(switchWorkspace("ws2")).rejects.toThrow(/Not logged in/);
+  });
+});
+
+// Tiny helper to forge a 3-part JWT with a given payload (no signature
+// verification on our side — decodeJwtPayload only base64-decodes part 2).
+function fakeJwt(payload: Record<string, unknown>): string {
+  const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64")
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${enc({ alg: "HS256" })}.${enc(payload)}.sig`;
+}
+
+describe("healDriftedOrgToken", () => {
+  it("is a no-op when JWT org_id matches creds.orgId", async () => {
+    const token = fakeJwt({ user_id: "u", org_id: "match", type: "api_token" });
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token, orgId: "match", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(saveCredentialsMock).not.toHaveBeenCalled();
+    expect(out.token).toBe(token);
+  });
+
+  it("is a no-op when the token has no org_id claim", async () => {
+    const token = fakeJwt({ user_id: "u", type: "api_token" });
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token, orgId: "anything", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(saveCredentialsMock).not.toHaveBeenCalled();
+    expect(out.orgId).toBe("anything");
+  });
+
+  it("is a no-op when creds.orgId is missing (legacy creds)", async () => {
+    const token = fakeJwt({ user_id: "u", org_id: "anything", type: "api_token" });
+    const { healDriftedOrgToken } = await importAuth();
+    await healDriftedOrgToken({ token, apiUrl: "https://api.example", savedAt: "x" } as any);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(saveCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("re-mints and persists when JWT org_id differs from creds.orgId", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock.mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }));
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.example/users/me/tokens");
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe(`Bearer ${stale}`);
+    expect(JSON.parse(init.body).organization_id).toBe("target-org");
+
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(saveCredentialsMock.mock.calls[0][0].token).toBe("fresh-tok");
+    expect(out.token).toBe("fresh-tok");
+  });
+
+  it("returns the original creds and does NOT persist when the mint call fails", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+    const logged: string[] = [];
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+      (m) => logged.push(m),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(saveCredentialsMock).not.toHaveBeenCalled();
+    expect(out.token).toBe(stale); // unchanged
+    expect(logged.some(m => /re-mint failed/.test(m))).toBe(true);
   });
 });
 
