@@ -37,7 +37,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.4.0
         with:
-          node-version: "24.12"
+          # Pinned to 22 to match ci.yaml. Under Node 24+ the tree-sitter
+          # 0.21 prebuild ABI no longer matches and the install falls back
+          # to a from-source compile that fails (binding.gyp does not
+          # request the C++20 standard Node 24's V8 headers now require).
+          # The ensure-tree-sitter.mjs postinstall heal cannot fully
+          # recover once npm drops the optional dep, so tsc later fails
+          # with "Cannot find module 'tree-sitter'". Aligning with CI's
+          # Node version makes the prebuild match and avoids the issue
+          # entirely. Engines field allows >=22; bundles produced by
+          # Node 22 stay forward-compatible.
+          node-version: 22
 
       - name: Check if version was already bumped in this push
         id: check_bump
@@ -228,7 +238,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.4.0
         with:
-          node-version: "24.12"
+          # Same rationale as the release job above — keep both jobs on
+          # Node 22 so the publish-time install/build matches what
+          # actually went through CI and what the release-job rebuild
+          # produced. Drifting between jobs would re-introduce the
+          # tree-sitter ABI/build mismatch.
+          node-version: 22
           registry-url: "https://registry.npmjs.org"
           scope: "@deeplake"
           cache: "npm"
