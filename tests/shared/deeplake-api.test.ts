@@ -387,6 +387,61 @@ describe("DeeplakeApi.listTables", () => {
   });
 });
 
+// ── knownTablesOrNull ─────────────────────────────────────────────────────────
+// Distinguishes a genuinely-empty workspace ([]) from a failed lookup (null)
+// so read-gating callers can skip a SELECT on [] but fall back to
+// SELECT-then-catch on null. See src/deeplake-api.ts.
+
+describe("DeeplakeApi.knownTablesOrNull", () => {
+  it("returns the fetched list and caches it on a successful lookup", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [{ table_name: "memory" }, { table_name: "sessions" }] }),
+    });
+    const api = makeApi();
+    expect(await api.knownTablesOrNull()).toEqual(["memory", "sessions"]);
+    // Second call is served from cache — no extra round-trip.
+    expect(await api.knownTablesOrNull()).toEqual(["memory", "sessions"]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns [] (cacheable) for a genuinely-empty workspace", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+    const api = makeApi();
+    expect(await api.knownTablesOrNull()).toEqual([]);
+  });
+
+  it("returns null (not []) when the lookup fails non-retryably, and does not cache the failure", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 403, text: async () => "" });
+    const api = makeApi();
+    expect(await api.knownTablesOrNull()).toBeNull();
+    // A null (untrusted) result is NOT cached — the next call retries the fetch.
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [{ table_name: "memory" }] }),
+    });
+    expect(await api.knownTablesOrNull()).toEqual(["memory"]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null after exhausting network retries", async () => {
+    mockFetch.mockRejectedValue(new Error("FAIL"));
+    const api = makeApi();
+    expect(await api.knownTablesOrNull()).toBeNull();
+  });
+
+  it("serves a cache warmed by listTables() without a second fetch", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ tables: [{ table_name: "memory" }] }),
+    });
+    const api = makeApi();
+    await api.listTables();                               // warms _tablesCache
+    expect(await api.knownTablesOrNull()).toEqual(["memory"]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);           // no extra round-trip
+  });
+});
+
 // ── ensureXxxTable helpers (new schema-heal flow) ───────────────────────────
 
 import {
