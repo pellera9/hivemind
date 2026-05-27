@@ -29,7 +29,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run jscpd
         # Threshold 7% is the current baseline (see .jscpd.json). The job
@@ -64,7 +64,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build (typecheck + emit bundle artefacts)
         # `build` runs `tsc && esbuild`, which is a strict superset of
@@ -331,7 +331,7 @@ jobs:
         # tree-sitter.mjs exit 1 here, failing the job at the earliest
         # possible step (instead of swallowing the warning and failing
         # later in tsc with a confusing "Cannot find module" error).
-        run: npm install
+        run: npm ci
 
       - name: Build (typecheck + emit bundle artefacts)
         # Second backstop: if the strict-postinstall path somehow doesn't
