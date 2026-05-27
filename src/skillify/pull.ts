@@ -59,6 +59,15 @@ export interface PullOptions {
   dryRun?: boolean;
   /** Overwrite even when local version >= remote. Backs up the existing file. */
   force?: boolean;
+  /**
+   * Optional existence predicate built from a trusted table list (see
+   * DeeplakeApi.knownTablesOrNull). When it reports the skills table absent
+   * we skip the SELECT and treat it as empty — a fresh workspace lazily
+   * creates `skills` on first INSERT, so reading it first otherwise logs a
+   * 42P01 server-side on every SessionStart auto-pull. Omitted (or the list
+   * couldn't be fetched) falls back to the SELECT-then-catch path below.
+   */
+  tableExists?: (name: string) => boolean;
 }
 
 export interface PullResultEntry {
@@ -463,21 +472,29 @@ export async function runPull(opts: PullOptions): Promise<PullSummary> {
   // hasn't been lazy-migrated by an INSERT yet) retry once with the
   // legacy SELECT shape so the pull keeps working until the next write.
   let rows: Record<string, unknown>[] = [];
-  try {
-    rows = await opts.query(sql);
-  } catch (e: any) {
-    if (isMissingTableError(e?.message)) {
-      rows = [];
-    } else if (isMissingContributorsColumnError(e?.message)) {
-      const legacySql = buildPullSql({
-        tableName: opts.tableName,
-        users: opts.users,
-        skillName: opts.skillName,
-        includeContributors: false,
-      });
-      rows = await opts.query(legacySql);
-    } else {
-      throw e;
+  if (opts.tableExists && !opts.tableExists(opts.tableName)) {
+    // Known-absent from a trusted table list: skip the SELECT so a fresh
+    // workspace doesn't log a 42P01 server-side. Leaves rows empty, the same
+    // outcome as the isMissingTableError catch below, minus the round-trip
+    // and the error.
+    rows = [];
+  } else {
+    try {
+      rows = await opts.query(sql);
+    } catch (e: any) {
+      if (isMissingTableError(e?.message)) {
+        rows = [];
+      } else if (isMissingContributorsColumnError(e?.message)) {
+        const legacySql = buildPullSql({
+          tableName: opts.tableName,
+          users: opts.users,
+          skillName: opts.skillName,
+          includeContributors: false,
+        });
+        rows = await opts.query(legacySql);
+      } else {
+        throw e;
+      }
     }
   }
   const latest = selectLatestPerName(rows);

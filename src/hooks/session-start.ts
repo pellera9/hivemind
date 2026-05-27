@@ -210,6 +210,11 @@ async function main(): Promise<void> {
         // It absorbs its own errors (missing table, network, etc.)
         // and returns "" on any failure — SessionStart MUST NOT fail
         // because of a bad rules read.
+        // Trusted table list (cached — ensureTable above already warmed it)
+        // so the renderer can skip the rules/goals SELECT when the table
+        // isn't there yet, avoiding a 42P01 server-side on every SessionStart.
+        const known = await api.knownTablesOrNull();
+        const tableExists = known ? (name: string) => known.includes(name) : undefined;
         rulesBlock = await renderContextBlock(
           (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>,
           {
@@ -217,7 +222,7 @@ async function main(): Promise<void> {
             goalsTable: config.goalsTableName,
             currentUser: config.userName,
           },
-          { log },
+          { log, tableExists },
         );
       }
     } catch (e: any) {

@@ -103,6 +103,30 @@ describe("renderContextBlock — empty + degradation", () => {
     expect(out).toContain("HIVEMIND RULES");
     expect(out).not.toContain("HIVEMIND GOALS");
   });
+
+  it("skips the SELECT entirely when tableExists reports both tables absent", async () => {
+    // A fresh workspace that never created hivemind_rules/goals must not fire
+    // the SELECT (which would log a 42P01 server-side every SessionStart).
+    const { calls, query } = mockQuery([
+      () => [fakeRule()],   // would render IF queried — it must NOT be
+      () => [fakeGoal()],
+    ]);
+    const tableExists = (_name: string) => false;
+    const out = await renderContextBlock(query, INPUT, { tableExists });
+    expect(out).toBe("");
+    expect(calls).toEqual([]); // crucial: no query fired
+  });
+
+  it("still SELECTs only the table tableExists reports present", async () => {
+    const { calls, query } = mockQuery([
+      () => [fakeRule()],   // rules present
+      () => [],             // (goals would be empty, but is skipped)
+    ]);
+    const tableExists = (name: string) => name === "hivemind_rules";
+    const out = await renderContextBlock(query, INPUT, { tableExists });
+    expect(calls.length).toBe(1); // only the rules SELECT ran; goals skipped
+    expect(out).toContain("no DROP TABLE");
+  });
 });
 
 // ── rules rendering ─────────────────────────────────────────────────────────

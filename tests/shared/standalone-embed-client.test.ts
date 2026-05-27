@@ -17,7 +17,7 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -610,22 +610,21 @@ describe("tryEmbedStandalone", () => {
   });
 
   it("uses default option values when called with only positional args", async () => {
-    // Just exercises the `opts.x ?? default` branches. No daemon is up at
-    // the real /tmp socket, so this must return null without throwing —
-    // and quickly, since SHARED_DAEMON_PATH typically doesn't exist on a
-    // CI runner. We can't hard-assert on filesystem state outside the
-    // tmpdir, so we settle for "doesn't throw, returns null".
-    //
-    // If the developer's machine HAS a real shared daemon at
-    // SHARED_DAEMON_PATH and it answers, the call returns a vector
-    // instead of null — both outcomes are valid; we only assert one of
-    // those two.
-    if (existsSync(SHARED_DAEMON_PATH) && statSync(SHARED_DAEMON_PATH).isFile()) {
-      // Can't mock the canonical install — skip the strict assertion.
-      return;
-    }
+    // Exercises the `opts.x ?? default` plumbing — the point of this test is
+    // the defaulting, not the daemon's presence. On a CI runner nothing is
+    // listening at the canonical per-user socket, so the call returns null.
+    // On a dev box where `hivemind embeddings install` left a live daemon,
+    // the very same call returns a real vector. Both are valid; we assert
+    // the *shape* (null, or a numeric vector) rather than probing the
+    // filesystem — the daemon answers on a unix socket whose liveness is
+    // independent of whether SHARED_DAEMON_PATH (the entry .js) exists.
     const vec = await tryEmbedStandalone("hello", "document");
-    expect(vec).toBeNull();
+    if (vec === null) {
+      expect(vec).toBeNull();
+    } else {
+      expect(Array.isArray(vec)).toBe(true);
+      expect(vec.every((n) => typeof n === "number")).toBe(true);
+    }
   });
 });
 

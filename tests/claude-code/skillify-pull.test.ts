@@ -446,6 +446,31 @@ describe("runPull", () => {
     expect(text).toContain("Use vox");
   });
 
+  it("skips the SELECT when tableExists reports the skills table absent", async () => {
+    // A fresh workspace lazily creates `skills` on first INSERT; reading it
+    // first otherwise logs a 42P01 server-side on every SessionStart auto-pull.
+    const { fn, calls } = makeMockQuery([sampleRow()]); // rows present IF queried
+    const summary = await runPull({
+      query: fn, tableName: "skills", install: "project", cwd: projectRoot,
+      users: [], dryRun: false, force: false,
+      tableExists: (_name: string) => false,
+    });
+    expect(calls).toEqual([]);     // crucial: no query fired → no 42P01
+    expect(summary.scanned).toBe(0);
+    expect(summary.wrote).toBe(0);
+  });
+
+  it("still SELECTs when tableExists reports the skills table present", async () => {
+    const { fn, calls } = makeMockQuery([sampleRow()]);
+    const summary = await runPull({
+      query: fn, tableName: "skills", install: "project", cwd: projectRoot,
+      users: [], dryRun: false, force: false,
+      tableExists: (name: string) => name === "skills",
+    });
+    expect(calls.length).toBe(1);
+    expect(summary.wrote).toBe(1);
+  });
+
   it("skips when local version >= remote", async () => {
     const dir = join(projectSkillsRoot, "vox-cli--alice");
     mkdirSync(dir, { recursive: true });

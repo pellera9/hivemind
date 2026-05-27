@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const queryMock = vi.fn();
+const knownTablesMock = vi.fn();
 
 vi.mock("../../src/config.js", () => ({
   loadConfig: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../../src/deeplake-api.js", () => ({
       _tableName: string,
     ) { /* nothing */ }
     query(sql: string) { return queryMock(sql); }
+    async knownTablesOrNull() { return knownTablesMock(); }
   },
 }));
 
@@ -55,6 +57,9 @@ beforeEach(() => {
   logged = [];
   erred = [];
   queryMock.mockReset().mockResolvedValue([]);
+  // Default: untrusted table list (null) → renderer SELECTs unconditionally.
+  // Individual tests override to return a trusted list and exercise gating.
+  knownTablesMock.mockReset().mockResolvedValue(null);
   loadConfigMock.mockReset().mockReturnValue(VALID_CONFIG);
   logSpy = vi.spyOn(console, "log").mockImplementation((...a: any[]) => { logged.push(a.join(" ")); });
   errSpy = vi.spyOn(console, "error").mockImplementation((...a: any[]) => { erred.push(a.join(" ")); });
@@ -148,6 +153,32 @@ describe("runContextCommand — output", () => {
     queryMock.mockResolvedValueOnce([]);
     await runContextCommand([]);
     expect(logged).toEqual([]);
+    expect(erred.some(l => l.includes("(no active rules or open goals)"))).toBe(true);
+  });
+
+  it("gates the SELECTs on knownTablesOrNull when the table list is trusted", async () => {
+    // A non-null table list lets renderContextBlock skip the SELECT for any
+    // absent table (avoids a 42P01 server-side). Both present here, so both
+    // SELECTs still run — and the tableExists predicate is exercised.
+    knownTablesMock.mockResolvedValue(["hivemind_rules", "hivemind_goals"]);
+    queryMock.mockResolvedValueOnce([{
+      id: "row-1", rule_id: "rule-1", text: "no DROP TABLE on prod",
+      scope: "team", status: "active", assigned_by: "alice@activeloop.ai",
+      version: 1, created_at: "2026-05-20T10:00:00Z",
+      agent: "manual", plugin_version: "0.7.99",
+    }]);
+    queryMock.mockResolvedValueOnce([]); // goals empty
+    await runContextCommand([]);
+    expect(logged.some(l => l.includes("no DROP TABLE on prod"))).toBe(true);
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips every SELECT when the trusted table list omits rules + goals", async () => {
+    // Fresh workspace: knownTablesOrNull returns [] → no SELECT may fire
+    // (each would log a 42P01 server-side). Empty render → stderr diagnostic.
+    knownTablesMock.mockResolvedValue([]);
+    await runContextCommand([]);
+    expect(queryMock).not.toHaveBeenCalled();
     expect(erred.some(l => l.includes("(no active rules or open goals)"))).toBe(true);
   });
 

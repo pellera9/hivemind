@@ -413,6 +413,22 @@ export class DeeplakeApi {
     return tables;
   }
 
+  /**
+   * Like listTables() but returns null when the list could NOT be trusted
+   * (the fetch failed / was non-cacheable). Callers gating a read on table
+   * existence use this to tell a genuinely-empty workspace ([]) apart from a
+   * failed lookup (null): on [] they can safely skip the read (no table → no
+   * 42P01), on null they must fall back to SELECT-then-catch so a transient
+   * lookup blip doesn't drop a read of a table that really exists.
+   */
+  async knownTablesOrNull(): Promise<string[] | null> {
+    if (this._tablesCache) return [...this._tablesCache];
+    const { tables, cacheable } = await this._fetchTables();
+    if (!cacheable) return null;
+    this._tablesCache = [...tables];
+    return [...tables];
+  }
+
   private async _fetchTables(): Promise<{ tables: string[]; cacheable: boolean }> {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {

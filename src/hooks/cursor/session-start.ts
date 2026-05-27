@@ -184,6 +184,10 @@ async function main(): Promise<void> {
         // to the user (model-only), so the full block is fine. Renderer
         // absorbs its own errors and returns "" on any failure (including
         // missing rules table — see context-renderer.ts).
+        // Trusted table list (cached) so the renderer skips the rules/goals
+        // SELECT when the table isn't there yet — avoids a 42P01 server-side.
+        const known = await api.knownTablesOrNull();
+        const tableExists = known ? (name: string) => known.includes(name) : undefined;
         rulesBlock = await renderContextBlock(
           (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>,
           {
@@ -191,7 +195,7 @@ async function main(): Promise<void> {
             goalsTable: config.goalsTableName,
             currentUser: config.userName,
           },
-          { log },
+          { log, tableExists },
         );
       }
     } catch (e: any) {

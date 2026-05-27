@@ -47,6 +47,15 @@ export interface RenderOptions {
   maxGoals?: number;
   /** Optional logger for debugging — receives line-by-line trace events. */
   log?: (msg: string) => void;
+  /**
+   * Optional existence predicate built from a trusted table list (see
+   * DeeplakeApi.knownTablesOrNull). When provided and it reports a table
+   * absent, we skip the SELECT entirely — a fresh workspace that never
+   * created hivemind_rules / hivemind_goals would otherwise log a 42P01
+   * server-side on every SessionStart. When omitted (e.g. the table list
+   * couldn't be fetched), we fall back to the SELECT-then-catch path below.
+   */
+  tableExists?: (name: string) => boolean;
 }
 
 /**
@@ -82,25 +91,35 @@ export async function renderContextBlock(
     // Over-fetch so the "X more" truncation hint can give a useful
     // count. 4× the display cap balances "this user has a lot" against
     // unbounded reads on a busy org.
+    const tableExists = opts.tableExists;
+
     let rules: RuleRow[] = [];
-    try {
-      rules = await listRules(query, input.rulesTable, {
-        status: "active",
-        limit: Math.max(maxRules * 4, maxRules + 1),
-      });
-    } catch (rulesErr: unknown) {
-      const rmsg = rulesErr instanceof Error ? rulesErr.message : String(rulesErr);
-      log(`render-context-block: rules unavailable (continuing): ${rmsg}`);
+    if (tableExists && !tableExists(input.rulesTable)) {
+      log(`render-context-block: rules table "${input.rulesTable}" not present — skipping read`);
+    } else {
+      try {
+        rules = await listRules(query, input.rulesTable, {
+          status: "active",
+          limit: Math.max(maxRules * 4, maxRules + 1),
+        });
+      } catch (rulesErr: unknown) {
+        const rmsg = rulesErr instanceof Error ? rulesErr.message : String(rulesErr);
+        log(`render-context-block: rules unavailable (continuing): ${rmsg}`);
+      }
     }
 
     let goals: OpenGoalRow[] = [];
-    try {
-      goals = await listOpenGoals(query, input.goalsTable, input.currentUser, {
-        limit: Math.max(maxGoals * 4, maxGoals + 1),
-      });
-    } catch (goalsErr: unknown) {
-      const gmsg = goalsErr instanceof Error ? goalsErr.message : String(goalsErr);
-      log(`render-context-block: goals unavailable (continuing): ${gmsg}`);
+    if (tableExists && !tableExists(input.goalsTable)) {
+      log(`render-context-block: goals table "${input.goalsTable}" not present — skipping read`);
+    } else {
+      try {
+        goals = await listOpenGoals(query, input.goalsTable, input.currentUser, {
+          limit: Math.max(maxGoals * 4, maxGoals + 1),
+        });
+      } catch (goalsErr: unknown) {
+        const gmsg = goalsErr instanceof Error ? goalsErr.message : String(goalsErr);
+        log(`render-context-block: goals unavailable (continuing): ${gmsg}`);
+      }
     }
 
     const rulesShown = rules.slice(0, maxRules);

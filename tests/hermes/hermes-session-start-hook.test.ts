@@ -30,6 +30,7 @@ vi.mock("../../src/deeplake-api.js", () => ({
     query(sql: string) { return queryMock(sql); }
     ensureTable(...a: unknown[]) { return ensureTableMock(...a); }
     ensureSessionsTable(...a: unknown[]) { return ensureSessionsTableMock(...a); }
+    async knownTablesOrNull() { return null; }
   },
 }));
 // autoUpdate mocked at the boundary — exhaustively tested in

@@ -21,6 +21,7 @@ const debugLogMock = vi.fn();
 const ensureTableMock = vi.fn();
 const ensureSessionsTableMock = vi.fn();
 const queryMock = vi.fn();
+const knownTablesMock = vi.fn();
 const autoUpdateMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
@@ -39,6 +40,7 @@ vi.mock("../../src/deeplake-api.js", () => ({
     ensureTable() { return ensureTableMock(); }
     ensureSessionsTable(t: string) { return ensureSessionsTableMock(t); }
     query(sql: string) { return queryMock(sql); }
+    async knownTablesOrNull() { return knownTablesMock(); }
   },
 }));
 // autoUpdate mocked at the boundary (CLAUDE.md rule 5) — the helper
@@ -138,6 +140,9 @@ beforeEach(() => {
   ensureTableMock.mockReset().mockResolvedValue(undefined);
   ensureSessionsTableMock.mockReset().mockResolvedValue(undefined);
   queryMock.mockReset().mockResolvedValue([]); // "no existing summary"
+  // Default: untrusted table list (null) → renderer SELECTs unconditionally.
+  // The "trusted list" test below overrides to exercise the gating predicate.
+  knownTablesMock.mockReset().mockResolvedValue(null);
   autoUpdateMock.mockReset().mockResolvedValue(undefined);
   getInstalledVersionMock.mockReset().mockReturnValue("9.9.9");
   // Default: no manifest → 0 mined skills. Individual tests override.
@@ -255,6 +260,38 @@ describe("session-start hook — placeholder branching", () => {
     const parsed = JSON.parse(out!);
     expect(parsed.hookSpecificOutput.additionalContext).toContain("HIVEMIND RULES");
     expect(parsed.hookSpecificOutput.additionalContext).toContain("no DROP TABLE on prod");
+  });
+
+  it("gates the renderer SELECTs on the cached table list when trusted", async () => {
+    // ensureTable above warms the table cache; knownTablesOrNull then returns
+    // a trusted, non-null list so the renderer can skip SELECTs for absent
+    // tables (avoids a 42P01 on every SessionStart). Both present here → both
+    // rules + goals SELECTs still fire, exercising the tableExists predicate.
+    knownTablesMock.mockResolvedValue(["hivemind_rules", "hivemind_goals"]);
+    const rule = {
+      id: "row-1", rule_id: "rule-1", text: "no DROP TABLE on prod",
+      scope: "team", status: "active", assigned_by: "alice@activeloop.ai",
+      version: 1, created_at: "2026-05-20T10:00:00Z",
+      agent: "manual", plugin_version: "0.7.99",
+    };
+    queryMock.mockResolvedValueOnce([]);     // placeholder SELECT
+    queryMock.mockResolvedValueOnce([]);     // placeholder INSERT
+    queryMock.mockResolvedValueOnce([rule]); // renderer rules
+    queryMock.mockResolvedValueOnce([]);     // renderer goals (empty)
+    const out = await runHook();
+    const parsed = JSON.parse(out!);
+    expect(parsed.hookSpecificOutput.additionalContext).toContain("no DROP TABLE on prod");
+    expect(queryMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("skips the renderer SELECTs when the trusted table list omits rules + goals", async () => {
+    // Fresh workspace: knownTablesOrNull returns [] → the renderer fires no
+    // SELECT. Only the placeholder SELECT + INSERT run.
+    knownTablesMock.mockResolvedValue([]);
+    await runHook();
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT path FROM/);
+    expect(queryMock.mock.calls[1][0]).toMatch(/^INSERT INTO/);
   });
 
   it("HIVEMIND_CAPTURE=false: no placeholder, no DDL (ensure), but renderer still runs", async () => {

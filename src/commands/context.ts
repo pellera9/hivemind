@@ -61,6 +61,8 @@ export async function runContextCommand(args: string[]): Promise<void> {
     cfg.tableName,
   );
 
+  const known = await api.knownTablesOrNull();
+  const tableExists = known ? (name: string) => known.includes(name) : undefined;
   const block = await renderContextBlock(
     (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>,
     {
@@ -68,6 +70,7 @@ export async function runContextCommand(args: string[]): Promise<void> {
       goalsTable: cfg.goalsTableName,
       currentUser: cfg.userName,
     },
+    { tableExists },
   );
 
   if (!block) {
