@@ -310,10 +310,7 @@ Triggers, generation flow, full `pull` / `unpull` semantics, gate-CLI table per 
 Hivemind builds a live graph of your codebase from the same traces it captures — files, symbols, imports, and the edges your agents actually traverse during real sessions. Search and recall walk this graph, not just plain text, so "where do we handle auth?" lands on the actual files the team's agents have touched, not just every file that mentions "auth".
 
 <p align="center">
-  <video autoplay loop muted playsinline width="800">
-    <source src="docs/screenshots/codebase-graph.mp4" type="video/mp4">
-    Your browser does not support the video tag. <a href="docs/screenshots/codebase-graph.mp4">Download the recording</a>.
-  </video>
+  <img src="docs/screenshots/codebase-graph.png" alt="Hivemind codebase graph visualizing the hivemind repo itself" width="800">
 </p>
 
 Above: the Hivemind codebase rendered through its own graph feature.
