@@ -66,6 +66,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6.0.2
+        with:
+          # Don't persist the checkout token into .git/config — it would be
+          # readable by later steps / artifacts. This job only reads + tests.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6.4.0
