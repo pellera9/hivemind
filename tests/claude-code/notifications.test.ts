@@ -732,11 +732,12 @@ describe("drainSessionStart resilience", () => {
 describe("bundle/session-notifications.js (built artifact)", () => {
   const bundlePath = join(process.cwd(), "claude-code", "bundle", "session-notifications.js");
 
-  // spawnSync (vs execFileSync) so we can capture stdout + stderr separately
-  // to verify the dual-channel emit: user-visible stderr banner + model-
-  // visible additionalContext JSON on stdout. Both must carry the same text.
-  // The default input now includes a session_id — primary-banner requires
-  // one to compute a per-session dedupKey.
+  // spawnSync (vs execFileSync) so we can capture stdout + stderr separately.
+  // The banner is userVisibleOnly: it must appear in the top-level
+  // systemMessage and NEVER in hookSpecificOutput.additionalContext (the
+  // model channel) — that's the prompt-injection guard, asserted below.
+  // The default input includes a session_id — primary-banner requires one
+  // to compute a per-session dedupKey.
   function runBundle(
     extraEnv: Record<string, string>,
     input: string = JSON.stringify({ session_id: "bundle-test-session" }),
@@ -776,14 +777,11 @@ describe("bundle/session-notifications.js (built artifact)", () => {
       expect(stdout.length).toBeGreaterThan(0);
       const parsed = JSON.parse(stdout);
 
-      // Model-visible channel: nested additionalContext.
       expect(parsed.hookSpecificOutput.hookEventName).toBe("SessionStart");
-      const ctx = parsed.hookSpecificOutput.additionalContext;
-      expect(ctx).toContain("ada");
-      expect(ctx).toContain("acme");
-      // Anti-pattern guard at the bundle level.
-      expect(ctx).not.toContain("DEEPLAKE MEMORY");
-      expect(ctx).not.toContain("HIVEMIND");
+      // The banner is userVisibleOnly: nothing reaches the model-visible
+      // additionalContext channel. (The model gets its memory instructions
+      // from the sibling session-start hook, not this one.)
+      expect(parsed.hookSpecificOutput.additionalContext).toBeUndefined();
 
       // User-visible channel: top-level systemMessage. Empirically validated
       // against Claude Code 2.1.131 — surfaces as
@@ -800,7 +798,7 @@ describe("bundle/session-notifications.js (built artifact)", () => {
     }
   });
 
-  it("dual-channel emit: top-level systemMessage and additionalContext carry the SAME text", () => {
+  it("user-only emit: welcome renders to systemMessage and NEVER to additionalContext", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "hivemind-notif-bundle-"));
     try {
       mkdirSync(join(sandbox, ".deeplake"), { recursive: true, mode: 0o700 });
@@ -818,7 +816,11 @@ describe("bundle/session-notifications.js (built artifact)", () => {
       );
       const { stdout } = runBundle({ HOME: sandbox });
       const parsed = JSON.parse(stdout);
-      expect(parsed.systemMessage).toBe(parsed.hookSpecificOutput.additionalContext);
+      // The banner (welcome / savings / any mined or summary-derived brief)
+      // is userVisibleOnly — it must reach the user but never the model's
+      // prompt context. This is the bundle-level prompt-injection guard.
+      expect(parsed.systemMessage).toContain("Welcome back");
+      expect(parsed.hookSpecificOutput.additionalContext).toBeUndefined();
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
     }

@@ -26,7 +26,7 @@
 import type { Credentials } from "../../commands/auth-creds.js";
 import { DeeplakeApi } from "../../deeplake-api.js";
 import { loadConfig } from "../../config.js";
-import { sqlStr } from "../../utils/sql.js";
+import { sqlStr, sqlIdent } from "../../utils/sql.js";
 import { projectNameFromCwd } from "../../utils/project-name.js";
 import { log as _log } from "../../utils/debug.js";
 
@@ -125,7 +125,19 @@ export async function pickResumeBrief(
 
   try {
     const cfg = loadConfig();
-    const table = cfg?.tableName ?? "memory";
+    // sqlIdent throws on anything outside [A-Za-z_][A-Za-z0-9_]*. The table
+    // name comes from HIVEMIND_TABLE (loadConfig) and is interpolated into
+    // FROM "${table}" below — sqlStr only escapes string LITERALS, not
+    // identifiers, so a name containing a double-quote could break out of
+    // the quoted identifier. Validate it; on a bad value, log and bail to a
+    // plain welcome rather than run an attacker-shaped query.
+    let table: string;
+    try {
+      table = sqlIdent(cfg?.tableName ?? "memory");
+    } catch (e: unknown) {
+      log(`invalid table identifier "${cfg?.tableName}": ${(e as Error).message}`);
+      return null;
+    }
     const api = new DeeplakeApi(
       creds.token,
       creds.apiUrl ?? "https://api.deeplake.ai",

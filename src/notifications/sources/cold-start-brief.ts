@@ -118,11 +118,15 @@ function lastBriefMs(): number | null {
   }
 }
 
-function writeState(sessionsScanned: number): void {
+function writeState(sessionsScanned: number, isFirstRun: boolean): void {
   try {
     writeFileSync(
       STATE_FILE(),
-      JSON.stringify({ lastBriefTs: new Date().toISOString(), fireReason: "first_run", sessionsScanned }),
+      JSON.stringify({
+        lastBriefTs: new Date().toISOString(),
+        fireReason: isFirstRun ? "first_run" : "renudge",
+        sessionsScanned,
+      }),
     );
   } catch (e: unknown) {
     log(`writeState failed: ${(e as Error).message}`);
@@ -177,7 +181,7 @@ function capitalize(s: string): string {
 
 function deriveProjectLabel(projDirName: string, cwdSeen: string | undefined): string {
   if (cwdSeen) {
-    const seg = cwdSeen.split("/").filter(Boolean);
+    const seg = cwdSeen.split(/[/\\]/).filter(Boolean);
     return seg[seg.length - 1] || projDirName;
   }
   const parts = projDirName.split("-");
@@ -251,7 +255,7 @@ function loadLocalSession(path: string, cutoff: Date): SessionMeta | null {
   const projectCwd = first.cwd ?? last.cwd;
   if (last.ts < cutoff) return null;
 
-  const projDirName = path.split("/").slice(-2, -1)[0] ?? "unknown";
+  const projDirName = path.split(/[/\\]/).slice(-2, -1)[0] ?? "unknown";
   return {
     firstTs: first.ts,
     lastTs: last.ts,
@@ -451,7 +455,7 @@ export async function pickColdStartBrief(
       return null;
     }
 
-    writeState(sessions.length);
+    writeState(sessions.length, !hadState);
     log(`fired (authed=${authed}, first=${!hadState}, signal=${signal.kind})`);
     return { brief, firstRun: !hadState };
   } catch (e: unknown) {
