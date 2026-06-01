@@ -83,10 +83,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           npm version patch --no-git-tag-version
+          # --ignore-scripts prevents npm ci from firing the `prepare` hook
+          # (husky && npm run build), which would double-build and fail if
+          # tree-sitter bindings aren't ready yet. postinstall (the
+          # tree-sitter heal) is run explicitly below instead.
+          npm ci --ignore-scripts
+          node scripts/ensure-tree-sitter.mjs
           # `npm run build` runs `prebuild` (scripts/sync-versions.mjs) → tsc →
           # esbuild. sync-versions propagates the new version into the 6
           # tracked manifests; esbuild bakes it into bundles via `define`.
-          npm install
           npm run build
 
       - name: Commit 1 — release commit with bundles force-tracked
@@ -167,19 +172,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get merged PR description
+      - name: Get merged PR title
         if: steps.check.outputs.exists == 'false'
         id: pr
         run: |
-          # Find the most recent merged PR targeting main
-          PR_BODY=$(gh pr list --state merged --base main --limit 1 --json body,title -q '.[0].body // ""')
           PR_TITLE=$(gh pr list --state merged --base main --limit 1 --json title -q '.[0].title // ""')
-          {
-            echo "body<<ENDOFBODY"
-            echo "$PR_BODY"
-            echo "ENDOFBODY"
-            echo "title=$PR_TITLE"
-          } >> "$GITHUB_OUTPUT"
+          echo "title=$PR_TITLE" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -189,8 +187,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: "${{ steps.version.outputs.version }} — ${{ steps.pr.outputs.title }}"
-          body: ${{ steps.pr.outputs.body }}
-          generate_release_notes: false
+          generate_release_notes: true
 
       - name: Set outputs for publish job
         # Captures the local HEAD SHA after the bump+push (or the
@@ -312,7 +309,12 @@ jobs:
         # to sign the artifact via Sigstore. Even if NPM_TOKEN later leaks,
         # consumers can verify the package was built by THIS workflow on
         # THIS commit, and npmjs.com displays a Provenance badge.
-        run: npm publish --provenance --access public
+        # Node 22 ships with npm 10.x; OIDC tokenless publishing requires
+        # npm 11+. Upgrade in-place before publish; the rest of the job
+        # (build, test) keeps the Node 22 tree-sitter ABI.
+        run: |
+          npm install -g npm@11
+          npm publish --provenance --access public
 
       - name: Install ClawHub CLI
         run: npm install -g clawhub

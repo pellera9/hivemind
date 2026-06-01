@@ -13,6 +13,7 @@ import { loadCredentials, saveCredentials, healDriftedOrgToken } from "../comman
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlStr } from "../utils/sql.js";
+import { projectNameFromCwd } from "../utils/project-name.js";
 import { readStdin } from "../utils/stdin.js";
 import { log as _log } from "../utils/debug.js";
 import { getInstalledVersion } from "../utils/version-check.js";
@@ -26,6 +27,7 @@ import { renderLocalMinedNote } from "../skillify/local-mined-banner.js";
 import { maybeAutoMineLocal } from "../skillify/spawn-mine-local-worker.js";
 import { graphContextLine } from "../graph/session-context.js";
 import { spawnGraphPullWorker } from "../graph/spawn-pull-worker.js";
+import { entrypointPassesOnlyCliGate } from "./shared/capture-gate.js";
 const log = (msg: string) => _log("session-start", msg);
 
 const __bundleDir = dirname(fileURLToPath(import.meta.url));
@@ -97,7 +99,7 @@ async function createPlaceholder(api: DeeplakeApi, table: string, sessionId: str
   }
 
   const now = new Date().toISOString();
-  const projectName = cwd.split("/").pop() ?? "unknown";
+  const projectName = projectNameFromCwd(cwd);
   const sessionSource = `/sessions/${userName}/${userName}_${orgName}_${workspaceId}_${sessionId}.jsonl`;
   const content = [
     `# Session ${sessionId}`,
@@ -189,7 +191,7 @@ async function main(): Promise<void> {
   // under capture=false. The renderer is read-only and runs
   // regardless; the rules table it queries is lazy-created by the
   // CLI write path (`hivemind rules add`).
-  const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false";
+  const captureEnabled = process.env.HIVEMIND_CAPTURE !== "false" && entrypointPassesOnlyCliGate();
   let rulesBlock = "";
   if (input.session_id && creds?.token) {
     try {
@@ -204,7 +206,10 @@ async function main(): Promise<void> {
           await createPlaceholder(api, table, input.session_id, input.cwd ?? "", config.userName, config.orgName, config.workspaceId, pluginVersion);
           log("placeholder created");
         } else {
-          log("placeholder + schema ensure skipped (HIVEMIND_CAPTURE=false)");
+          const reason = process.env.HIVEMIND_CAPTURE === "false"
+            ? "HIVEMIND_CAPTURE=false"
+            : "HIVEMIND_CAPTURE_ONLY_CLI gate";
+          log(`placeholder + schema ensure skipped (${reason})`);
         }
         // Renderer is read-only and runs regardless of captureEnabled.
         // It absorbs its own errors (missing table, network, etc.)
@@ -286,7 +291,7 @@ async function main(): Promise<void> {
 
   const baseContext = creds?.token
     ? `${resolvedContext}\n\nLogged in to Deeplake as org: ${creds.orgName ?? creds.orgId} (workspace: ${creds.workspaceId ?? "default"})${updateNotice}`
-    : `${resolvedContext}\n\n⚠️ Not logged in to Deeplake. Memory search will not work. Ask the user to run /hivemind:login to authenticate.${localMinedNote}${updateNotice}`;
+    : `${resolvedContext}\n\nNot logged in to Deeplake; memory search is unavailable this session.${localMinedNote}${updateNotice}`;
   // Append the rules block when there's something to show, then
   // append the graph note (single line, may be empty). The renderer
   // returns "" on empty state OR failure, so the ternary stays terse.

@@ -25,9 +25,9 @@ function hookCmd(bundleFile: string, timeout: number, matcher?: string): Record<
 function buildHooksJson(): Record<string, unknown> {
   return {
     hooks: {
-      SessionStart: [hookCmd("session-start.js", 120)],
+      SessionStart: [hookCmd("session-start.js", 10, "startup|resume")],
       UserPromptSubmit: [hookCmd("capture.js", 10)],
-      PreToolUse: [hookCmd("pre-tool-use.js", 15, "Bash")],
+      PreToolUse: [hookCmd("pre-tool-use.js", 10, "Bash")],
       PostToolUse: [hookCmd("capture.js", 15)],
       Stop: [hookCmd("stop.js", 30)],
     },
@@ -70,8 +70,15 @@ export function isHivemindHookEntry(entry: unknown, pluginDir: string = PLUGIN_D
     if (!h || typeof h !== "object") return false;
     const cmd = (h as Record<string, unknown>).command;
     if (typeof cmd !== "string") return false;
-    if (cmd.includes(`${pluginDir}/bundle/`)) return true;
-    return HIVEMIND_BUNDLE_FILES.some(f => cmd.includes(`/bundle/${f}`));
+    // Normalize path separators before matching. On Windows the hook command
+    // is written via join() (backslashes: `...\hivemind\bundle\capture.js`),
+    // but our match patterns use forward slashes. Without this, dedup never
+    // matched the prior install on Windows, so every re-install APPENDED a
+    // duplicate hivemind hook — the user's "PostToolUse runs twice" bug.
+    const nCmd = cmd.replace(/\\/g, "/");
+    const nPluginDir = pluginDir.replace(/\\/g, "/");
+    if (nCmd.includes(`${nPluginDir}/bundle/`)) return true;
+    return HIVEMIND_BUNDLE_FILES.some(f => nCmd.includes(`/bundle/${f}`));
   });
 }
 
@@ -88,7 +95,10 @@ function isForeignHivemindHookEntry(entry: unknown, pluginDir: string = PLUGIN_D
     if (!h || typeof h !== "object") return false;
     const cmd = (h as Record<string, unknown>).command;
     if (typeof cmd !== "string") return false;
-    return !cmd.includes(`${pluginDir}/bundle/`);
+    // Same separator normalization as isHivemindHookEntry — a canonical-path
+    // entry written with backslashes on Windows must NOT be mis-flagged as
+    // "foreign" (which would emit a spurious dev-clone warning on re-install).
+    return !cmd.replace(/\\/g, "/").includes(`${pluginDir.replace(/\\/g, "/")}/bundle/`);
   });
 }
 

@@ -54,6 +54,14 @@ function traceSql(msg: string): void {
 // queue.ts's sameDedupKey check.
 let _signalledBalanceExhausted = false;
 
+// NOTE: the "approaching empty" (low-balance, balance > 0) warning is no
+// longer detected here. It's surfaced LIVE at SessionStart from the
+// `X-Activeloop-Balance-Cents` header on the org-stats call — see
+// notifications/sources/{org-stats,primary-banner}.ts. Detecting it on the
+// query path made it lag a session (it landed in the queue, read at the
+// NEXT SessionStart) and could double with the live banner. Hard exhaustion
+// (402) still flows through maybeSignalBalanceExhausted below.
+
 /**
  * If the response is the server's "out of credits" 402
  * (`{"balance_cents":0,"error":"insufficient balance, please top up"}`),
@@ -87,6 +95,10 @@ function maybeSignalBalanceExhausted(status: number, bodyText: string): void {
     title: "Hivemind credits exhausted — top up to keep capturing",
     body: `Sessions are not being saved and memory recall is returning empty. Top up at ${billingUrl()} to restore capture and recall.`,
     dedupKey: { reason: "balance-zero" },
+    // User-facing billing notice → user channel only. Never the model's
+    // additionalContext: a "top up at <url>" instruction in the agent prompt
+    // is a prompt-injection pattern external agents flag.
+    userVisibleOnly: true,
   }).catch((e: unknown) => {
     log(`enqueue balance-exhausted failed: ${e instanceof Error ? e.message : String(e)}`);
   });
