@@ -76,12 +76,13 @@ describe("processCodexPreToolUse: pass-through + unsafe", () => {
     expect(d.action).toBe("pass");
   });
 
-  it("returns `guide` with the unsupported-command guidance when a memory-path command uses an interpreter", async () => {
+  it("blocks (not `guide`) the unsafe command when a memory-path command uses an interpreter", async () => {
+    // "guide" exits 0 and would let Codex run python on the host; must block.
     const d = await processCodexPreToolUse(
       toolInput("python ~/.deeplake/memory/x.py"),
       baseDeps(),
     );
-    expect(d.action).toBe("guide");
+    expect(d.action).toBe("block");
     expect(d.output).toContain("not supported");
     expect(d.rewrittenCommand).toContain("python");
   });

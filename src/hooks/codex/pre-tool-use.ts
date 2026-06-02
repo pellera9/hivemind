@@ -119,11 +119,14 @@ export async function processCodexPreToolUse(
 
   const rewritten = rewritePaths(cmd);
   if (!isSafe(rewritten)) {
-    const guidance = buildUnsupportedGuidance();
-    logFn(`unsupported command, returning guidance: ${rewritten}`);
+    // BLOCK (exit 2), not "guide" (exit 0). guide lets Codex run the original
+    // command on the host, so an unsafe memory command — `python … x.py`,
+    // backticks, `$()`, `curl` — would still execute and could read/run real
+    // files. Block stops it and injects the guidance instead.
+    logFn(`unsupported command, blocking with guidance: ${rewritten}`);
     return {
-      action: "guide",
-      output: guidance,
+      action: "block",
+      output: buildUnsupportedGuidance(),
       rewrittenCommand: rewritten,
     };
   }
