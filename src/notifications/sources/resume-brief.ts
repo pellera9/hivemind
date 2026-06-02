@@ -57,10 +57,19 @@ const LOOKBACK = 5;
 const SCAN_LIMIT = 40;
 
 /** Hard cap on the lookup. DeeplakeApi.query retries ~3.5s on an unreachable
- *  endpoint; the SessionStart hook budget is 5s and fetchOrgStats already
- *  spends up to 1.5s before us. Race it so a slow backend degrades to a
- *  plain welcome instead of stalling the hook. */
-const QUERY_TIMEOUT_MS = 1_500;
+ *  endpoint; the SessionStart hook budget is 5s and fetchOrgStats is served
+ *  from cache before us. Race it so an *unreachable* backend degrades to a
+ *  plain welcome instead of stalling the hook.
+ *
+ *  Sized to the real cold-backend latency, NOT an optimistic guess. Measured
+ *  2026-06-02: the first session against a cold backend takes ~1.9s for this
+ *  query (warm: ~0.3s). The earlier 1.5s cap sat *below* that cold latency, so
+ *  every fresh-open silently lost the race — withTimeout does NOT cancel the
+ *  in-flight query, it just discarded the rows we were ~0.4s from receiving,
+ *  and pickResumeBrief reported "no prior summary" with the data sitting right
+ *  there. We already pay the cold latency; 3s lets us keep the payoff instead
+ *  of throwing it away. Still well inside the 5s hook budget. */
+const QUERY_TIMEOUT_MS = 3_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise<T>((resolve) => {

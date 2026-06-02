@@ -240,6 +240,38 @@ describe("pickResumeBrief", () => {
     expect(await pickResumeBrief(CREDS)).toBeNull();
   });
 
+  it("still fires when a cold backend is slow (~1.9s) — regression: the old 1.5s cap silently dropped every fresh-open pickup", async () => {
+    // Measured 2026-06-02: cold-backend query ~1912ms. The query DOES return
+    // rows (the data is there); it just resolves slower than the old 1.5s cap,
+    // which made withTimeout discard the result and report "no prior summary".
+    // The cap is now 3s, so a 1.9s response must produce the pickup.
+    vi.useFakeTimers();
+    queryMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve([{ summary: real("Wire the resume fallback"), path: "/s/a.md", last_update_date: "2026-05-30" }]),
+            1_900,
+          ),
+        ),
+    );
+    const p = pickResumeBrief(CREDS);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const b = await p;
+    expect(b?.brief).toContain("Wire the resume fallback");
+    expect(b?.brief).toContain("you left off here");
+  });
+
+  it("still degrades to a plain welcome when the backend is truly unreachable (slower than the 3s cap)", async () => {
+    vi.useFakeTimers();
+    queryMock.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve([{ summary: real("too late"), path: "/s/a.md" }]), 4_000)),
+    );
+    const p = pickResumeBrief(CREDS);
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(await p).toBeNull();
+  });
+
   it("returns null if anything in the body throws (outer guard)", async () => {
     loadConfigMock.mockImplementation(() => { throw new Error("boom"); });
     expect(await pickResumeBrief(CREDS)).toBeNull();

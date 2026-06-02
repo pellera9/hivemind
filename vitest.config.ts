@@ -462,6 +462,15 @@ export default defineConfig({
         "src/hooks/graph-on-stop.ts":        { statements: 85, branches: 70, functions: 85, lines: 85 },
         "src/commands/graph.ts":             { statements: 65, branches: 55, functions: 90, lines: 65 },
         "src/utils/repo-identity.ts":        { statements: 85, branches: 50, functions: 90, lines: 90 },
+        // fix/goals-vfs-skew — the Deeplake VFS (goal/kpi routing, graph
+        // bridge, session reads, soft-close/status-transition). Previously
+        // unenforced: the file sat at ~82% lines / ~72% branches and only
+        // surfaced as a red PR-coverage comment. deeplake-fs-coverage.test.ts
+        // exercises the structured-table dispatch, the /graph/* bridge, the
+        // session concat path, and the rm/mv goal flows against a stateful
+        // mock DeeplakeApi, bringing it to 97/91/97/99. Floor set at 90 to
+        // catch regressions on these paths going forward.
+        "src/shell/deeplake-fs.ts":          { statements: 90, branches: 90, functions: 90, lines: 90 },
       },
     },
   },
