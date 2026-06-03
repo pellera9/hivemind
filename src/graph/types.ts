@@ -168,6 +168,19 @@ export interface FileExtraction {
   edges: GraphEdge[];
   /** Empty array on clean parse; populated when tree-sitter reports ERROR nodes. */
   parse_errors: ParseError[];
+  /**
+   * Phase 1.5 cross-file call resolution inputs. OPTIONAL and additive: older
+   * extractions / hand-built test fixtures omit them and the cross-file
+   * resolver simply produces no edges for that file. Populated by the
+   * TypeScript extractor; consumed by src/graph/resolve/cross-file.ts.
+   *
+   * Calls the per-file extractor could NOT resolve to a same-file declaration
+   * (e.g. an imported function). The resolver matches callee_name against the
+   * file's import_bindings to find a cross-file target.
+   */
+  raw_calls?: RawCall[];
+  /** Import name → source module bindings for this file (Phase 1.5). */
+  import_bindings?: ImportBinding[];
 }
 
 export interface ParseError {
@@ -175,4 +188,30 @@ export interface ParseError {
   message: string;
   /** Optional `L<line>` if the parser localized the error. */
   location?: string;
+}
+
+/**
+ * An unresolved call site captured by the extractor for the cross-file pass.
+ * `caller_id` is the enclosing declaration's node id; `callee_name` is the
+ * bare identifier being invoked. For a namespaced call `ns.foo()`, `receiver`
+ * is the namespace object (`ns`) and `callee_name` is the property (`foo`).
+ */
+export interface RawCall {
+  caller_id: string;
+  callee_name: string;
+  receiver?: string;
+}
+
+/**
+ * A single imported binding in a file. `imported_name` is the name in the
+ * SOURCE module: the real export for a named import (accounting for `as`
+ * aliases), the literal "default" for a default import, or "*" for a
+ * namespace import. `local_name` is how this file refers to it.
+ */
+export interface ImportBinding {
+  local_name: string;
+  imported_name: string;
+  kind: "named" | "default" | "namespace";
+  /** Raw module specifier, e.g. "./foo" or "../bar/baz". */
+  specifier: string;
 }

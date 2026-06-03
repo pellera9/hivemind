@@ -25,6 +25,7 @@ import type {
   GraphNode,
   NodeKind,
   ParseError,
+  RawCall,
 } from "../types.js";
 
 /**
@@ -118,6 +119,8 @@ export function extractTypeScript(
     nodes: [],
     edges: [],
     parse_errors: [],
+    raw_calls: [],
+    import_bindings: [],
   };
 
   collectParseErrors(root, relativePath, result.parse_errors);
@@ -364,6 +367,9 @@ function extractImports(
           relation: "imports",
           confidence: "EXTRACTED",
         });
+        // Phase 1.5: also record specifier-level bindings so the cross-file
+        // resolver can map a local call name back to its source module.
+        extractImportBindings(node, specifier, result);
       }
     }
     return; // import_statement has no nested declarations we care about
@@ -371,6 +377,63 @@ function extractImports(
   for (let i = 0; i < node.namedChildCount; i++) {
     const child = node.namedChild(i);
     if (child !== null) extractImports(child, relativePath, result, moduleNode);
+  }
+}
+
+/**
+ * Parse an `import_statement`'s clause into ImportBindings. Handles:
+ *   import foo from "x"            → default  (local foo, imported "default")
+ *   import * as ns from "x"        → namespace(local ns,  imported "*")
+ *   import { a, b as c } from "x"  → named    (a→a, c→b)
+ *   import foo, { a } from "x"     → default + named
+ * Type-only imports and bare `import "x"` contribute no bindings.
+ */
+function extractImportBindings(
+  importStmt: TSNode,
+  specifier: string,
+  result: FileExtraction,
+): void {
+  // Type-only import (`import type { Foo } from "x"`): bindings exist only at
+  // the type level and can never be a value call target, so binding them would
+  // let a later `Foo()` resolve to a wrong value-call edge. Skip the whole
+  // statement. tree-sitter keeps the `type` keyword as an unnamed child, so we
+  // detect it from the statement text rather than the named-child list.
+  if (/^import\s+type\b/.test(importStmt.text.trimStart())) return;
+
+  const clause = firstNamedChildOfTypes(importStmt, ["import_clause"]);
+  if (clause === null) return; // bare `import "x"` — side-effect only
+  const push = (b: { local_name: string; imported_name: string; kind: "named" | "default" | "namespace" }) => {
+    result.import_bindings!.push({ ...b, specifier });
+  };
+
+  for (let i = 0; i < clause.namedChildCount; i++) {
+    const child = clause.namedChild(i);
+    if (child === null) continue;
+    if (child.type === "identifier") {
+      // default import: `import foo from "x"`
+      push({ local_name: child.text, imported_name: "default", kind: "default" });
+    } else if (child.type === "namespace_import") {
+      // `import * as ns from "x"`
+      const id = firstNamedChildOfTypes(child, ["identifier"]);
+      if (id !== null) push({ local_name: id.text, imported_name: "*", kind: "namespace" });
+    } else if (child.type === "named_imports") {
+      // `import { a, b as c } from "x"`
+      for (let j = 0; j < child.namedChildCount; j++) {
+        const spec = child.namedChild(j);
+        if (spec === null || spec.type !== "import_specifier") continue;
+        // Per-specifier type-only (`import { type Foo }` / `type Foo as Bar`)
+        // — skip just this one. But NOT `import { type as value }`, which is a
+        // VALUE import of an export literally named `type` (the `as` after
+        // `type` means `type` is the imported name): negative-lookahead `as`.
+        if (/^type\s+(?!as\b)/.test(spec.text)) continue;
+        const nameNode = spec.childForFieldName("name");
+        const aliasNode = spec.childForFieldName("alias");
+        const imported = nameNode !== null ? nameNode.text : null;
+        if (imported === null) continue;
+        const local = aliasNode !== null ? aliasNode.text : imported;
+        push({ local_name: local, imported_name: imported, kind: "named" });
+      }
+    }
   }
 }
 
@@ -385,22 +448,28 @@ function extractCalls(
   if (node.type === "call_expression") {
     const callee = node.childForFieldName("function");
     if (callee !== null) {
-      const calleeKey = resolveCalleeKey(callee, declByName);
-      if (calleeKey !== null) {
-        const targetNode = declByName.get(calleeKey);
+      const callerNode = findEnclosingDeclaration(node, declByName);
+      if (callerNode !== null) {
+        const calleeKey = resolveCalleeKey(callee, declByName);
+        const targetNode = calleeKey !== null ? declByName.get(calleeKey) : undefined;
         if (targetNode !== undefined) {
-          const callerNode = findEnclosingDeclaration(node, declByName);
-          if (callerNode !== null) {
-            // Self-recursion is a valid edge: `function topLevel(a) { return topLevel(a-1); }`
-            // emits topLevel --calls--> topLevel. The graph is a multigraph so even repeated
-            // calls between the same caller/callee remain distinct via `ord` if we ever need it.
-            result.edges.push({
-              source: callerNode.id,
-              target: targetNode.id,
-              relation: "calls",
-              confidence: "EXTRACTED",
-            });
-          }
+          // Resolved in THIS file → emit the intra-file edge directly.
+          // Self-recursion is a valid edge: `function f(a){ return f(a-1); }`
+          // emits f --calls--> f. The graph is a multigraph so repeated calls
+          // between the same pair remain distinct via `ord` if we ever need it.
+          result.edges.push({
+            source: callerNode.id,
+            target: targetNode.id,
+            relation: "calls",
+            confidence: "EXTRACTED",
+          });
+        } else {
+          // Not a same-file declaration → record a raw call so the cross-file
+          // resolver (src/graph/resolve/cross-file.ts) can try to bind it to an
+          // imported symbol. Only `foo()` and `ns.foo()` shapes are captured;
+          // `this.foo()` / `obj.foo()` are left to intra-file / future phases.
+          const rc = rawCallFromCallee(callee, callerNode.id);
+          if (rc !== null) result.raw_calls!.push(rc);
         }
       }
     }
@@ -409,6 +478,29 @@ function extractCalls(
     const child = node.namedChild(i);
     if (child !== null) extractCalls(child, relativePath, result, declByName);
   }
+}
+
+/**
+ * Build a RawCall from a call_expression's callee, for the cross-file pass.
+ * Returns null for shapes we don't cross-file resolve in Phase 1.5:
+ *   foo()        → { callee_name: "foo" }
+ *   ns.foo()     → { callee_name: "foo", receiver: "ns" }   (namespace import)
+ *   this.foo()   → null (intra-file only)
+ *   a.b.foo()    → null (chained / instance dispatch)
+ */
+function rawCallFromCallee(callee: TSNode, callerId: string): RawCall | null {
+  if (callee.type === "identifier") {
+    return { caller_id: callerId, callee_name: callee.text };
+  }
+  if (callee.type === "member_expression") {
+    const object = callee.childForFieldName("object");
+    const property = callee.childForFieldName("property");
+    if (object !== null && object.type === "identifier" &&
+        property !== null && property.type === "property_identifier") {
+      return { caller_id: callerId, callee_name: property.text, receiver: object.text };
+    }
+  }
+  return null;
 }
 
 /**

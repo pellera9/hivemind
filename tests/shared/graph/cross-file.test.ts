@@ -1,0 +1,159 @@
+import { describe, it, expect } from "vitest";
+
+import { resolveCrossFileCalls, resolveModule } from "../../../src/graph/resolve/cross-file.js";
+import type { FileExtraction, GraphNode, ImportBinding, RawCall } from "../../../src/graph/types.js";
+
+function node(id: string, label: string, source_file: string, exported = true, kind: GraphNode["kind"] = "function"): GraphNode {
+  return { id, label, kind, source_file, source_location: "L1", language: "typescript", exported };
+}
+
+function extraction(
+  source_file: string,
+  nodes: GraphNode[],
+  raw_calls: RawCall[] = [],
+  import_bindings: ImportBinding[] = [],
+): FileExtraction {
+  return { source_file, language: "typescript", nodes, edges: [], parse_errors: [], raw_calls, import_bindings };
+}
+
+describe("resolveModule", () => {
+  const known = new Set(["src/b.ts", "src/util/index.ts", "src/x/y.tsx", "src/deep/mod.ts"]);
+
+  it("resolves ./sibling to a .ts file", () => {
+    expect(resolveModule("src/a.ts", "./b", known)).toBe("src/b.ts");
+  });
+  it("resolves ../ paths", () => {
+    expect(resolveModule("src/deep/here.ts", "../b", known)).toBe("src/b.ts");
+  });
+  it("resolves a directory import to index.ts", () => {
+    expect(resolveModule("src/a.ts", "./util", known)).toBe("src/util/index.ts");
+  });
+  it("resolves .tsx", () => {
+    expect(resolveModule("src/a.ts", "./x/y", known)).toBe("src/x/y.tsx");
+  });
+  it("strips a trailing .js (NodeNext style) to find the .ts source", () => {
+    expect(resolveModule("src/a.ts", "./b.js", known)).toBe("src/b.ts");
+  });
+  it("returns null for bare specifiers (node_modules / aliases)", () => {
+    expect(resolveModule("src/a.ts", "lodash", known)).toBeNull();
+    expect(resolveModule("src/a.ts", "@scope/pkg", known)).toBeNull();
+  });
+  it("returns null when no candidate matches a known file", () => {
+    expect(resolveModule("src/a.ts", "./nope", known)).toBeNull();
+  });
+});
+
+describe("resolveCrossFileCalls", () => {
+  it("named import → cross-file calls edge", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:caller:function", "caller", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:caller:function", callee_name: "foo" }],
+      [{ local_name: "foo", imported_name: "foo", kind: "named", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts")]);
+    const edges = resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes]);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      source: "src/a.ts:caller:function",
+      target: "src/b.ts:foo:function",
+      relation: "calls",
+      confidence: "EXTRACTED",
+    });
+  });
+
+  it("aliased named import (foo as bar) resolves by the imported name", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "bar" }],
+      [{ local_name: "bar", imported_name: "foo", kind: "named", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts")]);
+    const edges = resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes]);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.target).toBe("src/b.ts:foo:function");
+  });
+
+  it("namespace import ns.foo() resolves to the export named foo", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "foo", receiver: "ns" }],
+      [{ local_name: "ns", imported_name: "*", kind: "namespace", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts")]);
+    const edges = resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes]);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.target).toBe("src/b.ts:foo:function");
+  });
+
+  it("default imports are NOT resolved (we don't track which export is default)", () => {
+    // codex review: resolving a default import to a file's lone NAMED export is
+    // wrong — there may be no default export at all. We skip default entirely.
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "App" }],
+      [{ local_name: "App", imported_name: "default", kind: "default", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:App:function", "App", "src/b.ts")]);
+    expect(resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes])).toHaveLength(0);
+  });
+
+  it("skips bare-specifier imports (external packages)", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "debounce" }],
+      [{ local_name: "debounce", imported_name: "debounce", kind: "named", specifier: "lodash" }],
+    );
+    expect(resolveCrossFileCalls([a], a.nodes)).toHaveLength(0);
+  });
+
+  it("skips a call with no matching import binding (likely a global or intra-file)", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "setTimeout" }],
+      [],
+    );
+    expect(resolveCrossFileCalls([a], a.nodes)).toHaveLength(0);
+  });
+
+  it("skips when the imported symbol is not an export of the resolved file", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "missing" }],
+      [{ local_name: "missing", imported_name: "missing", kind: "named", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts")]);
+    expect(resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes])).toHaveLength(0);
+  });
+
+  it("does not resolve to a non-exported symbol", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [{ caller_id: "src/a.ts:c:function", callee_name: "foo" }],
+      [{ local_name: "foo", imported_name: "foo", kind: "named", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts", /*exported*/ false)]);
+    expect(resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes])).toHaveLength(0);
+  });
+
+  it("dedups repeated calls to the same imported symbol", () => {
+    const a = extraction(
+      "src/a.ts",
+      [node("src/a.ts:c:function", "c", "src/a.ts", false)],
+      [
+        { caller_id: "src/a.ts:c:function", callee_name: "foo" },
+        { caller_id: "src/a.ts:c:function", callee_name: "foo" },
+      ],
+      [{ local_name: "foo", imported_name: "foo", kind: "named", specifier: "./b" }],
+    );
+    const b = extraction("src/b.ts", [node("src/b.ts:foo:function", "foo", "src/b.ts")]);
+    expect(resolveCrossFileCalls([a, b], [...a.nodes, ...b.nodes])).toHaveLength(1);
+  });
+});

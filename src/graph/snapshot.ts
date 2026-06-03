@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 
 import { appendHistoryEntry, entryFromSnapshot, type SnapshotTrigger } from "./history.js";
 import { writeLastBuild } from "./last-build.js";
+import { resolveCrossFileCalls } from "./resolve/cross-file.js";
 import type {
   FileExtraction,
   GraphEdge,
@@ -59,6 +60,11 @@ export function buildSnapshot(
     for (const n of ex.nodes) nodes.push(n);
     for (const e of ex.edges) links.push(e);
   }
+
+  // Phase 1.5: resolve cross-file `calls` edges from per-file raw_calls +
+  // import_bindings now that every file's nodes are available for the export
+  // index. Deterministic + additive — files without raw_calls add nothing.
+  for (const e of resolveCrossFileCalls(extractions, nodes)) links.push(e);
 
   nodes.sort(compareNodes);
   links.sort(compareEdges);
