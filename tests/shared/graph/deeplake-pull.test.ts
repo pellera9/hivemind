@@ -8,7 +8,8 @@ import { pullSnapshot } from "../../../src/graph/deeplake-pull.js";
 import type { Config } from "../../../src/config.js";
 import type { DeeplakeApi } from "../../../src/deeplake-api.js";
 import { writeLastBuild, readLastBuild } from "../../../src/graph/last-build.js";
-import { repoDir } from "../../../src/graph/snapshot.js";
+import { canonicalSnapshot, computeSnapshotSha256, repoDir } from "../../../src/graph/snapshot.js";
+import type { GraphSnapshot } from "../../../src/graph/types.js";
 import { deriveProjectKey } from "../../../src/utils/repo-identity.js";
 
 /** Mirror of workTreeIdFor in src/commands/graph.ts and elsewhere. */
@@ -36,24 +37,49 @@ function makeConfig(): Config {
 }
 
 /**
- * A canonical-looking payload — the actual content is opaque to pullSnapshot
- * (it writes the bytes verbatim) so we just need *something* parseable that
- * looks like the writer's output.
+ * Realistic snapshot fixture — built through the SAME functions push uses
+ * (canonicalSnapshot / computeSnapshotSha256, see src/graph/snapshot.ts).
+ *
+ * Critical: the payload INCLUDES `observation`, but the sha256 column EXCLUDES
+ * it by contract (computeSnapshotSha256 hashes only the stable fields). The
+ * earlier fixture omitted `observation` entirely and hashed the raw payload
+ * bytes — that hid the production bug where pull was comparing the column
+ * value (stable-only hash) against a hash of the full payload (which always
+ * included observation), causing every real cloud row to be rejected as
+ * "snapshot_sha256 mismatch".
  */
-const CLOUD_PAYLOAD = JSON.stringify({
+const FIXTURE_SNAPSHOT: GraphSnapshot = {
   directed: true,
   multigraph: true,
-  graph: { schema_version: 1, generator: "hivemind-graph", commit_sha: "head1234abcd", repo_key: "k" },
-  nodes: [{ id: "a.ts:foo:function", label: "foo", kind: "function", source_file: "a.ts" }],
+  graph: {
+    schema_version: 1,
+    generator: "hivemind-graph",
+    commit_sha: "head1234abcd",
+    repo_key: "k",
+  },
+  observation: {
+    ts: "2026-06-02T00:00:00.000Z",
+    branch: "main",
+    worktree_path: "/tmp/wt-fixture",
+    repo_project: "test",
+    generator_version: "0.0.0-test",
+    source_files_extracted: 1,
+    source_files_skipped: 0,
+  },
+  nodes: [{
+    id: "a.ts:foo:function",
+    label: "foo",
+    kind: "function",
+    source_file: "a.ts",
+    source_location: "L1",
+    language: "typescript",
+    exported: false,
+  }],
   links: [],
-});
+};
 
-/**
- * Real sha256 of CLOUD_PAYLOAD. pullSnapshot (CodeRabbit P1) now verifies
- * the cloud row's snapshot_sha256 matches the payload bytes — fixtures
- * that claim a different sha would (correctly) be rejected as corrupt.
- */
-const CLOUD_PAYLOAD_SHA = createHash("sha256").update(CLOUD_PAYLOAD).digest("hex");
+const CLOUD_PAYLOAD = canonicalSnapshot(FIXTURE_SNAPSHOT);
+const CLOUD_PAYLOAD_SHA = computeSnapshotSha256(FIXTURE_SNAPSHOT);
 
 /**
  * Mock DeeplakeApi: captures every SQL string and returns a configured row
@@ -546,5 +572,132 @@ describe("pullSnapshot — ts coercion", () => {
     });
     expect(result.kind).toBe("pulled");
     if (result.kind === "pulled") expect(result.cloudTs).toBe(0);
+  });
+});
+
+describe("pullSnapshot — hash verification (regression: stable vs full payload)", () => {
+  let tmpCwd: string;
+
+  beforeEach(() => {
+    tmpCwd = mkdtempSync(join(tmpdir(), "pull-hashverify-"));
+  });
+  afterEach(() => {
+    try { rmSync(tmpCwd, { recursive: true, force: true }); } catch {}
+  });
+
+  // Documents the divergence the bug fix targets: by contract the column
+  // value is the *stable-field* hash (observation excluded) while the
+  // payload bytes intentionally include observation. Confirming both
+  // numerically here keeps the regression honest — a future "fix" that
+  // collapses the two would change one of these and the test fails.
+  it("column sha (stable fields) != raw-payload sha (full bytes)", () => {
+    const stable = computeSnapshotSha256(FIXTURE_SNAPSHOT);
+    const fullPayloadHash = createHash("sha256").update(CLOUD_PAYLOAD).digest("hex");
+    expect(stable).not.toBe(fullPayloadHash);
+    // CLOUD_PAYLOAD_SHA in the fixture mirrors push: it MUST be the stable hash.
+    expect(CLOUD_PAYLOAD_SHA).toBe(stable);
+  });
+
+  it("accepts a row whose column sha is the stable-field hash (the real push contract)", async () => {
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: CLOUD_PAYLOAD,
+        snapshot_sha256: CLOUD_PAYLOAD_SHA, // stable-field hash, as push writes
+        ts: 1_700_000_000_000,
+        node_count: 1, edge_count: 0,
+        worktree_id: "wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "head1234abcd",
+      makeApi: () => api,
+    });
+    // BEFORE the fix this returned `error` with "snapshot_sha256 mismatch"
+    // because pull was hashing the full payload and comparing to the
+    // column's stable-only hash.
+    expect(result.kind).toBe("pulled");
+  });
+
+  it("rejects a tampered payload whose stable fields don't match the claimed sha", async () => {
+    // Same column value, but the payload has been altered (extra node added
+    // post-push). The stable-field hash of the parsed payload won't match
+    // the column → pull must refuse rather than persist a corrupt snapshot.
+    const tampered: GraphSnapshot = {
+      ...FIXTURE_SNAPSHOT,
+      nodes: [
+        ...FIXTURE_SNAPSHOT.nodes,
+        {
+          id: "a.ts:bar:function",
+          label: "bar",
+          kind: "function",
+          source_file: "a.ts",
+          source_location: "L2",
+          language: "typescript",
+          exported: false,
+        },
+      ],
+    };
+    const tamperedPayload = canonicalSnapshot(tampered);
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: tamperedPayload,
+        snapshot_sha256: CLOUD_PAYLOAD_SHA, // claims the ORIGINAL sha
+        ts: 1_700_000_000_000,
+        node_count: 1, edge_count: 0,
+        worktree_id: "wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "head1234abcd",
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toMatch(/snapshot_sha256 mismatch/);
+    }
+  });
+
+  it("rejects a payload that doesn't parse as JSON", async () => {
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: "{not valid json",
+        snapshot_sha256: "a".repeat(64),
+        ts: 1_700_000_000_000,
+        node_count: 0, edge_count: 0,
+        worktree_id: "wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "head1234abcd",
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toMatch(/parse cloud snapshot/);
+    }
+  });
+
+  it("rejects a payload that parses but is missing nodes/links arrays", async () => {
+    const { api } = makeMockApi({
+      selectReturns: [{
+        snapshot_jsonb: JSON.stringify({ directed: true, multigraph: true, graph: {}, observation: {} }),
+        snapshot_sha256: "a".repeat(64),
+        ts: 1_700_000_000_000,
+        node_count: 0, edge_count: 0,
+        worktree_id: "wt",
+      }],
+    });
+    const result = await pullSnapshot(tmpCwd, {
+      loadConfig: makeConfig,
+      readHead: () => "head1234abcd",
+      makeApi: () => api,
+    });
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toMatch(/missing nodes\/links/);
+    }
   });
 });

@@ -53,7 +53,8 @@ import { sqlIdent, sqlStr } from "../utils/sql.js";
 import { deriveProjectKey } from "../utils/repo-identity.js";
 import { writeLastBuild, readLastBuild } from "./last-build.js";
 import { appendHistoryEntry } from "./history.js";
-import { repoDir } from "./snapshot.js";
+import { computeSnapshotSha256, repoDir } from "./snapshot.js";
+import type { GraphSnapshot } from "./types.js";
 
 export type PullOutcome =
   | { kind: "skipped-no-auth" }
@@ -148,11 +149,28 @@ export async function pullSnapshot(
   if (cloudPayload === null) {
     return errorOutcome("SELECT cloud row", new Error("invalid snapshot_jsonb payload"));
   }
-  // Hash mismatch = the API returned the wrong bytes for the claimed
-  // sha256. Refuse rather than poison the local cache. Empty sha is
-  // permitted (legacy rows that predate the column being populated).
+  // Parse the payload so we can recompute the *stable-field* hash the same
+  // way push does (see computeSnapshotSha256 in src/graph/snapshot.ts).
+  // The payload bytes intentionally include `observation` (build-time
+  // metadata), so hashing them directly would never match the column —
+  // which by contract excludes observation so identical code on different
+  // worktrees/branches/timestamps dedups.
+  let parsedSnapshot: GraphSnapshot;
+  try {
+    parsedSnapshot = JSON.parse(cloudPayload) as GraphSnapshot;
+  } catch (err) {
+    return errorOutcome("parse cloud snapshot", err);
+  }
+  if (!Array.isArray((parsedSnapshot as { nodes?: unknown }).nodes) ||
+      !Array.isArray((parsedSnapshot as { links?: unknown }).links)) {
+    return errorOutcome("parse cloud snapshot", new Error("snapshot missing nodes/links arrays"));
+  }
+  // Hash mismatch = the API returned a snapshot whose stable fields don't
+  // match the claimed sha256. Refuse rather than poison the local cache.
+  // Empty sha is permitted (legacy rows that predate the column being
+  // populated).
   if (cloudSha256 !== "") {
-    const computedSha = createHash("sha256").update(cloudPayload).digest("hex");
+    const computedSha = computeSnapshotSha256(parsedSnapshot);
     if (cloudSha256 !== computedSha) {
       return errorOutcome("SELECT cloud row", new Error(`snapshot_sha256 mismatch (expected ${cloudSha256}, got ${computedSha})`));
     }
