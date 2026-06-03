@@ -251,15 +251,22 @@ function renderIndex(snap: GraphSnapshot, baseDir: string, cwd: string): string 
   lines.push(`Nodes:   ${totalNodes}    Edges: ${totalEdges}`);
   lines.push("");
   lines.push("## How to query");
+  lines.push("  cat ~/.deeplake/memory/graph/query/<pattern>");
+  lines.push("    2-in-1: search + expand the top matches with their 1-hop");
+  lines.push("    neighbors (callers/callees/imports/heritage). Start here.");
+  lines.push("    Multi-token AND: query/<a>+<b> requires both tokens.");
+  lines.push("");
   lines.push("  cat ~/.deeplake/memory/graph/find/<pattern>");
   lines.push("    Case-insensitive substring match on node id + label.");
   lines.push("    Emits numbered handles [1] [2] ... saved for this worktree.");
   lines.push("");
   lines.push("  cat ~/.deeplake/memory/graph/show/<handle-or-pattern>");
-  lines.push("    <handle>: a digit from a prior `find/` (e.g. 3).");
+  lines.push("    <handle>: a digit from a prior `find/`/`query/` (e.g. 3).");
   lines.push("    <pattern>: a substring; resolves to a unique node if possible,");
   lines.push("               or shows candidates if ambiguous.");
   lines.push("    Output: node detail + 1-hop neighbors grouped by edge kind.");
+  lines.push("");
+  lines.push("  Also: neighborhood/<file> · layers · tour · path/<from>/<to>");
   lines.push("");
   lines.push("## Node kinds");
   for (const [k, n] of Object.entries(byKind).sort(([, a], [, b]) => b - a)) {

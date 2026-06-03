@@ -40,6 +40,10 @@ Activate when the user asks a *structural / relational* question about the code:
 cat ~/.deeplake/memory/graph/index.md
 #   Overview: node/edge counts, kind breakdown, top files by node count.
 
+cat ~/.deeplake/memory/graph/query/<pattern>   # START HERE (the 2-in-1)
+#   Search + expand the top matches with their 1-hop neighbors (callers,
+#   callees, imports, heritage). Multi-token AND: query/<a>+<b>.
+
 cat ~/.deeplake/memory/graph/find/<pattern>
 #   Case-insensitive substring search on node id + label (max 50 hits).
 #   Prints numbered handles [1] [2] ... saved for this worktree.

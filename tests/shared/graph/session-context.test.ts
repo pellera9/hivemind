@@ -88,8 +88,10 @@ describe("graphContextLine", () => {
     // raw-snapshot-only guidance. New assertions:
     expect(line).toContain("~/.deeplake/memory/graph/find/<pattern>");
     expect(line).toContain("~/.deeplake/memory/graph/show/<handle-or-pattern>");
+    expect(line).toContain("~/.deeplake/memory/graph/query/<pattern>"); // C7: primary entry advertised
     expect(line).toContain("no semantic edges yet");
-    expect(line).toContain("intra-file only");
+    // Cross-file resolution wording (replaces the old "intra-file only" caveat).
+    expect(line).toContain("Cross-file calls/imports/extends resolved");
   });
 
   it("renders '?' for counts on legacy files without node_count/edge_count", () => {
