@@ -295,11 +295,12 @@ function renderIndex(snap: GraphSnapshot, baseDir: string, cwd: string): string 
   }
   lines.push("");
   lines.push(`Limitations:`);
-  lines.push(`  - TypeScript only. AST-based, no semantic similarity edges.`);
-  lines.push(`  - 'calls' edges are intra-file only (Phase 1 extractor doesn't resolve cross-file).`);
-  lines.push(`    A node showing "Incoming (0)" may still have callers in OTHER files —`);
-  lines.push(`    treat it as "no callers in the same file", not "unused".`);
-  lines.push(`  - 'imports' edges are file-level and DO span files; trust them.`);
+  lines.push(`  - TypeScript / JavaScript / Python. AST-based, no semantic similarity edges yet.`);
+  lines.push(`  - Cross-file 'calls'/'imports'/'extends' ARE resolved for relative named/namespace`);
+  lines.push(`    imports; bare (npm)/aliased/barrel/dynamic imports stay unresolved. So a node`);
+  lines.push(`    with "Incoming (0)" is not proof of dead code — a caller may reach it via an`);
+  lines.push(`    unresolved import path. (Python cross-file resolution is a follow-up; Python is`);
+  lines.push(`    intra-file + structure only for now.)`);
   lines.push(`  - Stale after edits — if a file's mtime is newer than the build, read the live source.`);
   // Touch `cwd` so unused-param lint is quiet (we don't use cwd in render but the
   // caller wires it for symmetry with the find/show paths).
@@ -482,16 +483,24 @@ function setGet(m: Map<string, GraphEdge[]>, key: string): GraphEdge[] {
 /** Render one direction's edges grouped by relation, bounded. */
 function renderHopGroup(lines: string[], edges: GraphEdge[], dir: "IN" | "OUT", otherField: "source" | "target"): void {
   if (edges.length === 0) return;
-  const byRel = new Map<string, string[]>();
+  // Per relation, DEDUP the other endpoint and keep a count — a function that
+  // calls errorOutcome() 3 times should read `errorOutcome ×3`, not list it
+  // three times (multigraph edges; live-test polish).
+  const byRel = new Map<string, Map<string, number>>();
   for (const e of edges) {
-    const list = byRel.get(e.relation) ?? [];
-    list.push(e[otherField]);
-    byRel.set(e.relation, list);
+    let counts = byRel.get(e.relation);
+    if (!counts) { counts = new Map(); byRel.set(e.relation, counts); }
+    const id = e[otherField];
+    counts.set(id, (counts.get(id) ?? 0) + 1);
   }
-  for (const [rel, others] of [...byRel.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [rel, counts] of [...byRel.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const arrow = dir === "OUT" ? `--${rel}-->` : `<--${rel}--`;
-    const shown = others.slice(0, QUERY_NEIGHBOR_CAP);
-    const more = others.length > shown.length ? `  (+${others.length - shown.length} more)` : "";
+    const ids = [...counts.keys()].sort();
+    const shown = ids.slice(0, QUERY_NEIGHBOR_CAP).map((id) => {
+      const c = counts.get(id)!;
+      return c > 1 ? `${id} ×${c}` : id;
+    });
+    const more = ids.length > shown.length ? `  (+${ids.length - shown.length} more)` : "";
     lines.push(`      ${arrow} ${shown.join(", ")}${more}`);
   }
 }

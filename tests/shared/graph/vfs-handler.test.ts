@@ -125,8 +125,11 @@ describe("handleGraphVfs", () => {
       // top files: src/a.ts has 2 nodes, src/b.ts has 2
       expect(r.body).toMatch(/2\s+src\/a\.ts/);
       expect(r.body).toMatch(/2\s+src\/b\.ts/);
-      // Limitations must mention intra-file caveat (the codex insight)
-      expect(r.body).toContain("intra-file only");
+      // Limitations now reflect cross-file resolution + multi-language (live-test fix):
+      // no longer claims "intra-file only" or "TypeScript only".
+      expect(r.body).not.toContain("intra-file only");
+      expect(r.body).toContain("Cross-file");
+      expect(r.body).toContain("TypeScript / JavaScript / Python");
     }
   });
 
@@ -362,6 +365,26 @@ describe("handleGraphVfs", () => {
   it("query/ with no pattern → not-found", () => {
     const r = handleGraphVfs("query/", cwd);
     expect(r.kind).toBe("not-found");
+  });
+
+  it("query/ dedups repeated neighbors with a ×N count (not listed N times)", () => {
+    // Seed a snapshot where foo calls bar THREE times (multigraph).
+    mkdirSync(snapshotsDir, { recursive: true });
+    const snap = makeSnapshot("c9");
+    snap.links = [
+      { source: "src/a.ts:foo:function", target: "src/a.ts:bar:function", relation: "calls", confidence: "EXTRACTED", ord: 0 },
+      { source: "src/a.ts:foo:function", target: "src/a.ts:bar:function", relation: "calls", confidence: "EXTRACTED", ord: 1 },
+      { source: "src/a.ts:foo:function", target: "src/a.ts:bar:function", relation: "calls", confidence: "EXTRACTED", ord: 2 },
+    ];
+    writeFileSync(join(snapshotsDir, "c9.json"), JSON.stringify(snap));
+    writeLastBuild(baseDir, { ts: Date.now(), commit_sha: "c9", snapshot_sha256: "9".repeat(64), node_count: snap.nodes.length, edge_count: 3 }, wt);
+    const r = handleGraphVfs("query/foo", cwd);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.body).toContain("src/a.ts:bar:function ×3");
+      // not listed three separate times
+      expect((r.body.match(/src\/a\.ts:bar:function/g) ?? []).length).toBe(1);
+    }
   });
 
   it("query/ saves handles so a follow-up show/<N> resolves", () => {
