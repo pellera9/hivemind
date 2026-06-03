@@ -654,7 +654,9 @@ function walk(dir: string, out: string[]): void {
 
 function isSourceFile(name: string): boolean {
   if (name.endsWith(".d.ts")) return false; // declarations only, no implementation
-  return name.endsWith(".ts") || name.endsWith(".tsx");
+  // B7: JS/JSX/ESM/CJS too — the TS grammar is a superset so they parse with
+  // the same extractor (the language label is set per-file in extractTypeScript).
+  return /\.(tsx?|jsx?|mjs|cjs)$/.test(name);
 }
 
 function toForwardSlash(p: string): string {

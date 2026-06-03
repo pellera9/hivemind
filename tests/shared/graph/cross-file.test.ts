@@ -41,6 +41,27 @@ describe("resolveModule", () => {
   it("returns null when no candidate matches a known file", () => {
     expect(resolveModule("src/a.ts", "./nope", known)).toBeNull();
   });
+
+  it("resolves JS/JSX extensions (B7)", () => {
+    const js = new Set(["src/b.js", "src/c.jsx", "src/d/index.js"]);
+    expect(resolveModule("src/a.js", "./b", js)).toBe("src/b.js");
+    expect(resolveModule("src/a.js", "./c", js)).toBe("src/c.jsx");
+    expect(resolveModule("src/a.js", "./d", js)).toBe("src/d/index.js");
+    // NodeNext-style explicit .js extension still maps to the source.
+    expect(resolveModule("src/a.js", "./b.js", js)).toBe("src/b.js");
+  });
+
+  it("prefers the importer's family / explicit ext when both .ts and .js exist (codex B7)", () => {
+    const both = new Set(["src/b.ts", "src/b.js"]);
+    // JS importer, no extension → prefers .js
+    expect(resolveModule("src/a.js", "./b", both)).toBe("src/b.js");
+    // TS importer, no extension → prefers .ts
+    expect(resolveModule("src/a.ts", "./b", both)).toBe("src/b.ts");
+    // explicit .js wins regardless of importer
+    expect(resolveModule("src/a.ts", "./b.js", both)).toBe("src/b.js");
+    // explicit .ts wins regardless of importer
+    expect(resolveModule("src/a.js", "./b.ts", both)).toBe("src/b.ts");
+  });
 });
 
 describe("resolveCrossFileCalls", () => {

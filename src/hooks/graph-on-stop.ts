@@ -79,10 +79,10 @@ function tickIntervalMs(): number {
 }
 
 /**
- * Glob list applied to `git diff --name-only`. Matches the discoverSourceFiles
- * filter in src/commands/graph.ts — Phase 1 is TypeScript only.
+ * Glob list applied to `git diff --name-only`. Mirrors the isSourceFile filter
+ * in src/commands/graph.ts — TypeScript + JavaScript (B7), excluding .d.ts.
  */
-const SOURCE_GLOBS = ["*.ts", "*.tsx", ":(exclude)*.d.ts"];
+const SOURCE_GLOBS = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs", ":(exclude)*.d.ts"];
 
 /**
  * Run the gate logic, return whether a build should fire.

@@ -147,7 +147,21 @@ export function extractTypeScript(
   // in declByName. Skips when caller or callee is unresolved (Phase 1.5).
   extractCalls(root, relativePath, result, declByName);
 
+  // B7: label JavaScript files. The TS grammar is a superset so .js/.mjs/.cjs
+  // parse with the typescript grammar and .jsx with the tsx grammar (see
+  // pickParserForPath); only the reported `language` differs. makeNode hardcodes
+  // "typescript" for brevity, so remap once here for JS extensions.
+  if (isJavaScriptPath(relativePath)) {
+    result.language = "javascript";
+    for (const n of result.nodes) n.language = "javascript";
+  }
+
   return result;
+}
+
+/** True for JavaScript source extensions (.js/.jsx/.mjs/.cjs), false for TS. */
+function isJavaScriptPath(relativePath: string): boolean {
+  return /\.(jsx?|mjs|cjs)$/.test(relativePath);
 }
 
 // ─── Parse errors ──────────────────────────────────────────────────────────

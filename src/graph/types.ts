@@ -135,7 +135,7 @@ export type NodeKind =
   | "const"
   | "module";
 
-export type NodeLanguage = "typescript";
+export type NodeLanguage = "typescript" | "javascript";
 
 export interface GraphEdge {
   /** Source node `id`. */
