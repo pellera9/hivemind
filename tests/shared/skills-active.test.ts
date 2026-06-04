@@ -86,6 +86,15 @@ describe("buildSkillsActivePath", () => {
       "/skills_active/kamo/kamo_activeloop_default_S1.json",
     );
   });
+
+  it("falls back to `default` workspace when workspaceId is absent", () => {
+    // covers the `?? \"default\"` branch (mirrors buildSessionPath)
+    const p = buildSkillsActivePath(
+      { userName: "kamo", orgName: "activeloop", workspaceId: undefined as unknown as string },
+      "S1",
+    );
+    expect(p).toBe("/skills_active/kamo/kamo_activeloop_default_S1.json");
+  });
 });
 
 describe("buildSkillsActiveInsert", () => {

@@ -239,10 +239,11 @@ async function main(): Promise<void> {
               // Distinct `/skills_active/` namespace (NOT `/sessions/`) so the summary /
               // raw-transcript readers never mistake this attribution row for a transcript.
               const attrSessionPath = buildSkillsActivePath(config, input.session_id);
+              const attrFilename = attrSessionPath.slice(attrSessionPath.lastIndexOf("/") + 1);
               const sql = buildSkillsActiveInsert({
                 sessionsTable,
                 sessionPath: attrSessionPath,
-                filename: attrSessionPath.split("/").pop() ?? "",
+                filename: attrFilename,
                 userName: config.userName,
                 projectName: projectNameFromCwd(input.cwd),
                 pluginVersion,

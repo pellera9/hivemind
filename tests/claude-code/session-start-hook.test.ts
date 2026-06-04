@@ -23,6 +23,7 @@ const ensureSessionsTableMock = vi.fn();
 const queryMock = vi.fn();
 const knownTablesMock = vi.fn();
 const autoUpdateMock = vi.fn();
+const maybeFireSkillOptMock = vi.fn();
 
 vi.mock("../../src/utils/stdin.js", () => ({ readStdin: (...a: any[]) => stdinMock(...a) }));
 vi.mock("../../src/commands/auth.js", () => ({
@@ -43,6 +44,13 @@ vi.mock("../../src/deeplake-api.js", () => ({
     async knownTablesOrNull() { return knownTablesMock(); }
   },
 }));
+// SkillOpt weekly trigger mocked at the boundary: the real maybeFireSkillOpt
+// spawns a detached worker + writes a state file (side effects we must NOT do
+// in unit tests). Its own logic is covered in tests/shared/skillopt-trigger.test.ts.
+vi.mock("../../src/skillify/skillopt-trigger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/skillify/skillopt-trigger.js")>();
+  return { ...actual, maybeFireSkillOpt: (...a: any[]) => maybeFireSkillOptMock(...a) };
+});
 // autoUpdate mocked at the boundary (CLAUDE.md rule 5) — the helper
 // itself is exhaustively tested in autoupdate.test.ts. Here we only
 // assert the hook *called* it with the right agent id and *didn't*
@@ -94,6 +102,7 @@ const stdoutSpy = vi.spyOn(process.stdout, "write");
 async function runHook(env: Record<string, string | undefined> = {}): Promise<string | null> {
   delete process.env.HIVEMIND_WIKI_WORKER;
   delete process.env.HIVEMIND_CAPTURE;
+  delete process.env.HIVEMIND_SKILL_ATTRIBUTION;
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -154,6 +163,9 @@ beforeEach(() => {
   // common test scenario where the developer's HOME has no local
   // sessions visible to the test runner.
   maybeAutoMineLocalMock.mockReset().mockReturnValue({ triggered: false, reason: "no-claude-sessions" });
+  // Default: SkillOpt weekly trigger throttled (no spawn). Individual tests
+  // override to exercise the fired / error branches.
+  maybeFireSkillOptMock.mockReset().mockReturnValue({ fired: false, reason: "throttled" });
   // Disable auto-pull during this test: autoPullSkills would otherwise issue
   // an extra SQL query (against `skills`) through the same DeeplakeApi mock,
   // breaking the placeholder-branching call-count assertions. The auto-pull
@@ -223,21 +235,28 @@ describe("session-start hook — placeholder branching", () => {
     expect(ensureTableMock).toHaveBeenCalled();
     expect(ensureSessionsTableMock).toHaveBeenCalledWith("sessions");
     // 1 SELECT (existing-summary check) + 1 INSERT (placeholder)
-    // + 2 renderer SELECTs (listRules + listOpenGoals) = 4 queries.
-    expect(queryMock).toHaveBeenCalledTimes(4);
+    // + 1 INSERT (skills_active attribution) + 2 renderer SELECTs
+    // (listRules + listOpenGoals) = 5 queries.
+    expect(queryMock).toHaveBeenCalledTimes(5);
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT path FROM/);
     expect(queryMock.mock.calls[1][0]).toMatch(/^INSERT INTO/);
-    expect(queryMock.mock.calls[2][0]).toMatch(/^SELECT .* FROM "hivemind_rules"/);
-    expect(queryMock.mock.calls[3][0]).toMatch(/^SELECT .* FROM "hivemind_goals"/);
+    // skills_active attribution row — shape, not just count (asserts the new
+    // write is the attribution INSERT, so a second stray mutation can't sneak in).
+    expect(queryMock.mock.calls[2][0]).toMatch(/^INSERT INTO "sessions"/);
+    expect(queryMock.mock.calls[2][0]).toContain("skills_active");
+    expect(queryMock.mock.calls[3][0]).toMatch(/^SELECT .* FROM "hivemind_rules"/);
+    expect(queryMock.mock.calls[4][0]).toMatch(/^SELECT .* FROM "hivemind_goals"/);
     expect(debugLogMock).toHaveBeenCalledWith("placeholder created");
   });
 
   it("skips placeholder INSERT when summary already exists (resumed session)", async () => {
     queryMock.mockResolvedValueOnce([{ path: "/summaries/alice/sid-1.md" }]);
     await runHook();
-    // 1 placeholder SELECT (returns row, no INSERT) + 2 renderer SELECTs
-    // (rules + goals) = 3 queries.
-    expect(queryMock).toHaveBeenCalledTimes(3);
+    // 1 placeholder SELECT (returns row, no INSERT) + 1 skills_active
+    // attribution INSERT (runs regardless of placeholder branch) + 2 renderer
+    // SELECTs (rules + goals) = 4 queries.
+    expect(queryMock).toHaveBeenCalledTimes(4);
+    expect(queryMock.mock.calls[1][0]).toContain("skills_active");
   });
 
   it("non-empty rules block is appended to additionalContext", async () => {
@@ -253,6 +272,7 @@ describe("session-start hook — placeholder branching", () => {
     };
     queryMock.mockResolvedValueOnce([]);     // placeholder SELECT
     queryMock.mockResolvedValueOnce([]);     // placeholder INSERT
+    queryMock.mockResolvedValueOnce([]);     // skills_active attribution INSERT
     queryMock.mockResolvedValueOnce([rule]); // renderer rules
     queryMock.mockResolvedValueOnce([]);     // renderer goals (empty)
     const out = await runHook();
@@ -276,12 +296,13 @@ describe("session-start hook — placeholder branching", () => {
     };
     queryMock.mockResolvedValueOnce([]);     // placeholder SELECT
     queryMock.mockResolvedValueOnce([]);     // placeholder INSERT
+    queryMock.mockResolvedValueOnce([]);     // skills_active attribution INSERT
     queryMock.mockResolvedValueOnce([rule]); // renderer rules
     queryMock.mockResolvedValueOnce([]);     // renderer goals (empty)
     const out = await runHook();
     const parsed = JSON.parse(out!);
     expect(parsed.hookSpecificOutput.additionalContext).toContain("no DROP TABLE on prod");
-    expect(queryMock).toHaveBeenCalledTimes(4);
+    expect(queryMock).toHaveBeenCalledTimes(5);
   });
 
   it("skips the renderer SELECTs when the trusted table list omits rules + goals", async () => {
@@ -289,9 +310,12 @@ describe("session-start hook — placeholder branching", () => {
     // SELECT. Only the placeholder SELECT + INSERT run.
     knownTablesMock.mockResolvedValue([]);
     await runHook();
-    expect(queryMock).toHaveBeenCalledTimes(2);
+    // placeholder SELECT + placeholder INSERT + skills_active attribution
+    // INSERT = 3 (renderer fires no SELECT when no tables are trusted).
+    expect(queryMock).toHaveBeenCalledTimes(3);
     expect(queryMock.mock.calls[0][0]).toMatch(/^SELECT path FROM/);
     expect(queryMock.mock.calls[1][0]).toMatch(/^INSERT INTO/);
+    expect(queryMock.mock.calls[2][0]).toContain("skills_active");
   });
 
   it("HIVEMIND_CAPTURE=false: no placeholder, no DDL (ensure), but renderer still runs", async () => {
@@ -309,6 +333,44 @@ describe("session-start hook — placeholder branching", () => {
     expect(queryMock.mock.calls[1][0]).toMatch(/^SELECT .* FROM "hivemind_goals"/);
     expect(debugLogMock).toHaveBeenCalledWith(
       "placeholder + schema ensure skipped (HIVEMIND_CAPTURE=false)",
+    );
+  });
+
+  it("HIVEMIND_SKILL_ATTRIBUTION=0: skips the skills_active write entirely", async () => {
+    await runHook({ HIVEMIND_SKILL_ATTRIBUTION: "0" });
+    // placeholder SELECT + INSERT + 2 renderer SELECTs = 4 (NO attribution row).
+    expect(queryMock).toHaveBeenCalledTimes(4);
+    // negative assertion: the attribution INSERT must not be present at all.
+    for (const call of queryMock.mock.calls) {
+      expect(call[0]).not.toContain("skills_active");
+    }
+  });
+
+  it("swallows a failed skills_active attribution write (never breaks SessionStart)", async () => {
+    // Content-based (not position-based) so it's robust to query ordering: the
+    // attribution INSERT is the only query carrying the skills_active marker.
+    queryMock.mockImplementation((sql: string) =>
+      sql.includes("skills_active") ? Promise.reject(new Error("attr boom")) : Promise.resolve([]),
+    );
+    const out = await runHook();
+    expect(out).toBeTruthy(); // hook still completes and emits context
+    expect(debugLogMock).toHaveBeenCalledWith(
+      expect.stringContaining("skills_active attribution failed (swallowed): attr boom"),
+    );
+  });
+
+  it("logs the SkillOpt fired branch when the weekly trigger spawns a worker", async () => {
+    maybeFireSkillOptMock.mockReturnValue({ fired: true, reason: "spawned" });
+    await runHook();
+    expect(debugLogMock).toHaveBeenCalledWith("skillopt: fired (detached worker)");
+  });
+
+  it("swallows a throwing SkillOpt trigger (never breaks SessionStart)", async () => {
+    maybeFireSkillOptMock.mockImplementation(() => { throw new Error("fire boom"); });
+    const out = await runHook();
+    expect(out).toBeTruthy();
+    expect(debugLogMock).toHaveBeenCalledWith(
+      expect.stringContaining("skillopt trigger failed (swallowed): fire boom"),
     );
   });
 
