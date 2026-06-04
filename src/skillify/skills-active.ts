@@ -59,7 +59,9 @@ export function listActiveOrgSkills(skillsRoot: string = defaultSkillsRoot()): A
       version: readSkillVersion(skillsRoot, e.name), // enables v1-vs-v2 comparison
     });
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  // Sort by name, then author, so two org skills sharing a name (different
+  // authors) serialize deterministically regardless of filesystem entry order.
+  return out.sort((a, b) => a.name.localeCompare(b.name) || a.author.localeCompare(b.author));
 }
 
 /** Deterministic, stateless per-session A/B bucket (FNV-1a over session_id). */

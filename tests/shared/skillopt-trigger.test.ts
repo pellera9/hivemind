@@ -25,21 +25,32 @@ describe("maybeFireSkillOpt (auto-fire decision)", () => {
   function harness(over: Partial<Parameters<typeof maybeFireSkillOpt>[0]> = {}) {
     const saved: unknown[] = [];
     const spawn = vi.fn();
+    const release = vi.fn();
     const res = maybeFireSkillOpt({
       now: NOW,
       save: (s) => saved.push(s),
       spawnWorker: spawn,
       env: {} as NodeJS.ProcessEnv, // default ON
+      tryLock: () => true,          // injected so the unit test touches no real lock file
+      releaseLock: release,
       ...over,
     });
-    return { res, saved, spawn };
+    return { res, saved, spawn, release };
   }
 
-  it("fires on first run: spawns the worker exactly once and stamps lastRun=now", () => {
-    const { res, saved, spawn } = harness({ state: {} });
+  it("fires on first run: spawns the worker exactly once, stamps lastRun=now, releases the lock", () => {
+    const { res, saved, spawn, release } = harness({ state: {} });
     expect(res.fired).toBe(true);
     expect(spawn).toHaveBeenCalledTimes(1); // exactly one spawn
     expect(saved).toEqual([{ lastRun: new Date(NOW).toISOString() }]); // stamped before spawn
+    expect(release).toHaveBeenCalledTimes(1); // lock released after firing
+  });
+
+  it("does NOT fire when another process holds the weekly lock (cross-process race)", () => {
+    const { res, saved, spawn } = harness({ state: {}, tryLock: () => false });
+    expect(res).toEqual({ fired: false, reason: "locked" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(saved).toEqual([]); // the loser never stamps — only the lock winner does
   });
 
   it("fires when last run was 8 days ago", () => {

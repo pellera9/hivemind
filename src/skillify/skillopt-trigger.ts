@@ -11,21 +11,34 @@
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log as _log } from "../utils/debug.js";
+import { getStateDir } from "./state-dir.js";
+import { tryAcquireWorkerLock, releaseWorkerLock } from "./state.js";
 
 const log = (m: string) => _log("skillopt-trigger", m);
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const STATE_FILE = path.join(os.homedir(), ".deeplake", "state", "skillopt", "state.json");
+/** Cross-process lock key arbitrating the weekly fire (see maybeFireSkillOpt). */
+const LOCK_KEY = "skillopt-weekly";
+
+/**
+ * State file location. Computed lazily (NOT a module-level const) so a test or
+ * caller that sets HIVEMIND_STATE_DIR — or swaps HOME between calls — actually
+ * affects the path; a const would capture the real home at import time and
+ * bypass isolation. Routes through the shared getStateDir() resolver so the
+ * skillopt throttle honours the same override every other skillify sibling does.
+ */
+function stateFile(): string {
+  return path.join(getStateDir(), "skillopt-state.json");
+}
 
 export interface SkillOptState {
   lastRun?: string; // ISO timestamp of the last (attempted) run
 }
 
-export function loadState(file: string = STATE_FILE): SkillOptState {
+export function loadState(file: string = stateFile()): SkillOptState {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as SkillOptState;
   } catch {
@@ -33,10 +46,15 @@ export function loadState(file: string = STATE_FILE): SkillOptState {
   }
 }
 
-export function saveState(s: SkillOptState, file: string = STATE_FILE): void {
+export function saveState(s: SkillOptState, file: string = stateFile()): void {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(s));
+    // Atomic write: a torn state.json (write interrupted by a crash) would
+    // parse-fail on next load and silently reset the weekly throttle. tmp +
+    // rename makes the swap atomic on POSIX + Windows.
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.renameSync(tmp, file);
   } catch { /* swallow — SessionStart must not fail */ }
 }
 
@@ -54,11 +72,13 @@ export interface FireDeps {
   save?: (s: SkillOptState) => void;
   spawnWorker?: () => void;
   env?: NodeJS.ProcessEnv;
+  tryLock?: () => boolean;   // cross-process arbiter; default: real worker lock
+  releaseLock?: () => void;  // default: release the real worker lock
 }
 
 export interface FireResult {
   fired: boolean;
-  reason?: "disabled" | "in-worker" | "throttled" | "spawned";
+  reason?: "disabled" | "in-worker" | "throttled" | "locked" | "spawned";
 }
 
 /**
@@ -74,8 +94,20 @@ export function maybeFireSkillOpt(deps: FireDeps = {}): FireResult {
   const state = deps.state ?? loadState();
   if (!shouldFire(state.lastRun, now)) return { fired: false, reason: "throttled" };
 
-  (deps.save ?? saveState)({ ...state, lastRun: new Date(now).toISOString() });
-  (deps.spawnWorker ?? spawnWorker)();
+  // Cross-process arbiter: two SessionStart hooks racing at the weekly boundary
+  // could both pass the throttle and spawn duplicate workers (doubling user-side
+  // cost once the worker does real LLM work). An atomic openSync(wx) worker-lock
+  // lets exactly one win; the loser bails. The lock self-heals after maxAgeMs if
+  // a process dies mid-fire — well under the weekly cadence, so it never wedges
+  // the next fire.
+  const acquired = (deps.tryLock ?? (() => tryAcquireWorkerLock(LOCK_KEY)))();
+  if (!acquired) return { fired: false, reason: "locked" };
+  try {
+    (deps.save ?? saveState)({ ...state, lastRun: new Date(now).toISOString() });
+    (deps.spawnWorker ?? spawnWorker)();
+  } finally {
+    (deps.releaseLock ?? (() => releaseWorkerLock(LOCK_KEY)))();
+  }
   return { fired: true, reason: "spawned" };
 }
 
