@@ -137,7 +137,7 @@ describe("runUpdate — branches", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("npm-global: spawns 'npm install -g @latest' THEN 'hivemind install --skip-auth' (in that order, exactly once each)", async () => {
+  it("npm-global: spawns 'npm install -g @<pinned-version>' THEN 'hivemind install --skip-auth' (in that order, exactly once each)", async () => {
     const spawn = vi.fn();
     const code = await runUpdate({
       currentVersionOverride: "1.2.3",
