@@ -295,20 +295,25 @@ describe("per-agent bin resolvers", () => {
   // back to the literal CLI name. Both branches are covered deterministically
   // by overriding execSync per-call (success → resolved path; throw → literal
   // fallback), independent of whether the CLI exists in the test environment.
-  const RESOLVERS: Array<[string, () => string, string]> = [
-    ["codex", findCodexBin, "codex"],
-    ["cursor", findCursorBin, "cursor-agent"],
-    ["hermes", findHermesBin, "hermes"],
+  // [agent, resolver, literal-fallback, expected `which` command] — the last
+  // column pins each resolver to the RIGHT CLI name so a copy probing the
+  // wrong binary (e.g. cursor probing `which codex`) is caught.
+  const RESOLVERS: Array<[string, () => string, string, string]> = [
+    ["codex", findCodexBin, "codex", "which codex 2>/dev/null"],
+    ["cursor", findCursorBin, "cursor-agent", "which cursor-agent 2>/dev/null"],
+    ["hermes", findHermesBin, "hermes", "which hermes 2>/dev/null"],
   ];
 
-  it.each(RESOLVERS)("find%sBin returns the resolved path when `which` succeeds", (_n, fn) => {
+  it.each(RESOLVERS)("find%sBin returns the resolved path when `which` succeeds", (_n, fn, _fallback, whichCmd) => {
     vi.mocked(execSync).mockReturnValueOnce("/usr/local/bin/the-cli\n");
     expect(fn()).toBe("/usr/local/bin/the-cli");
+    expect(execSync).toHaveBeenCalledWith(whichCmd, { encoding: "utf-8" });
   });
 
-  it.each(RESOLVERS)("find%sBin falls back to the literal name when `which` fails", (_n, fn, fallback) => {
+  it.each(RESOLVERS)("find%sBin falls back to the literal name when `which` fails", (_n, fn, fallback, whichCmd) => {
     vi.mocked(execSync).mockImplementationOnce(() => { throw new Error("not found"); });
     expect(fn()).toBe(fallback);
+    expect(execSync).toHaveBeenCalledWith(whichCmd, { encoding: "utf-8" });
   });
 
   // cursor/hermes additionally guard `.trim() || "<literal>"` — a successful
