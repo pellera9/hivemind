@@ -223,12 +223,15 @@ export function selectRealSummaries(
 }
 
 /** One session's block in the brief: the open-work pointer plus a session-id +
- *  age line (full id, copy-pasteable into `claude --resume <id>`). Trailing
+ *  age line (full id, copy-pasteable into `claude --resume <id>`). The single
+ *  📌 lives on the brief header; each session is a `•` bullet under it. Trailing
  *  newline included. */
 function sessionBlock(next: string, sid: string, date: string | undefined): string {
   const age = relativeAge(date);
-  const meta = [sid ? `session ${sid}` : "", age].filter(Boolean).join(" · ");
-  return `   📌 ${next}\n` + (meta ? `   ↳ ${meta}\n` : "");
+  const meta = [sid ? `/resume ${sid}` : "", age].filter(Boolean).join(" · ");
+  // Continuation line is padded 2 extra spaces so the `↳` aligns under the
+  // first letter of the bullet text (after `• `), not under the `•` itself.
+  return `   • ${next}\n` + (meta ? `     ↳ ${meta}\n` : "");
 }
 
 function truncate(s: string, max = MAX_LINE_CHARS): string {
@@ -343,9 +346,8 @@ export async function pickResumeBrief(
       log(`fired (project=${project}, ${blocks.length} session(s) with open work)`);
       return {
         brief:
-          `Picking up on ${project} — where you left off:\n` +
-          blocks.join("") +
-          `   Ask me for the full thread whenever you're ready.`,
+          `📌 Picking up on ${project} — where you left off:\n` +
+          blocks.join(""),
       };
     }
 

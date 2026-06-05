@@ -73,7 +73,10 @@ export async function fetchOpenGoals(
     if (goals.length === 0) return null;
     return {
       count: goals.length,
-      sample: goals.slice(0, 3).map(g => truncate(g.label, 60)),
+      // Match the resume brief's line width (MAX_LINE_CHARS = 120) so the
+      // two 📌 blocks in the SessionStart banner truncate consistently
+      // instead of goals cutting off at 60 while "picking up" runs long.
+      sample: goals.slice(0, 3).map(g => truncate(g.label, 120)),
     };
   } catch (e: unknown) {
     log(`fetchOpenGoals: ${(e as Error).message}`);
@@ -100,15 +103,19 @@ function truncate(s: string, max: number): string {
 }
 
 /**
- * Format the goals summary into ONE body line suitable for the
- * primary banner. Returns the empty string when there is nothing
+ * Format the goals summary for the primary banner. The first line is a
+ * count header (which the caller prefixes with 📌); each sampled goal
+ * then gets its own indented bullet line so a multi-goal banner reads
+ * as a list instead of a single ' · '-joined run that the terminal
+ * truncates mid-goal. Returns the empty string when there is nothing
  * worth showing.
  */
 export function formatOpenGoalsLine(summary: OpenGoalsSummary | null): string {
   if (!summary || summary.count === 0) return "";
   const head = summary.count === 1
-    ? "1 goal open"
-    : `${summary.count} goals open`;
+    ? "1 goal open:"
+    : `${summary.count} goals open:`;
   if (summary.sample.length === 0) return head;
-  return `${head} · ${summary.sample.join(" · ")}`;
+  const bullets = summary.sample.map(g => `   • ${g}`).join("\n");
+  return `${head}\n${bullets}`;
 }

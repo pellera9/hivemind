@@ -172,13 +172,13 @@ describe("fetchOpenGoals — result mapping", () => {
     expect(summary!.sample).toEqual(["ok"]);
   });
 
-  it("truncates long labels to 60 chars with an ellipsis", async () => {
-    const long = "x".repeat(120);
+  it("truncates long labels to 120 chars (matching the resume brief width) with an ellipsis", async () => {
+    const long = "x".repeat(200);
     queryMock.mockResolvedValue([
       { goal_id: "g1", owner: "alice@activeloop.ai", status: "opened", content: long },
     ]);
     const summary = await fetchOpenGoals(BASE_CREDS as any, "hivemind_goals");
-    expect(summary!.sample[0].length).toBe(60);
+    expect(summary!.sample[0].length).toBe(120);
     expect(summary!.sample[0].endsWith("…")).toBe(true);
   });
 
@@ -197,15 +197,15 @@ describe("formatOpenGoalsLine", () => {
     expect(formatOpenGoalsLine({ count: 0, sample: [] })).toBe("");
   });
 
-  it("uses singular 'goal' when count=1", () => {
-    expect(formatOpenGoalsLine({ count: 1, sample: ["Ship X"] })).toBe("1 goal open · Ship X");
+  it("uses singular 'goal' when count=1, with the goal on its own bullet line", () => {
+    expect(formatOpenGoalsLine({ count: 1, sample: ["Ship X"] })).toBe("1 goal open:\n   • Ship X");
   });
 
-  it("uses plural 'goals' when count>1, joining the sample with ' · '", () => {
-    expect(formatOpenGoalsLine({ count: 3, sample: ["A", "B", "C"] })).toBe("3 goals open · A · B · C");
+  it("uses plural 'goals' when count>1, one bullet line per sampled goal", () => {
+    expect(formatOpenGoalsLine({ count: 3, sample: ["A", "B", "C"] })).toBe("3 goals open:\n   • A\n   • B\n   • C");
   });
 
   it("omits the sample tail when sample is empty (just the head)", () => {
-    expect(formatOpenGoalsLine({ count: 5, sample: [] })).toBe("5 goals open");
+    expect(formatOpenGoalsLine({ count: 5, sample: [] })).toBe("5 goals open:");
   });
 });

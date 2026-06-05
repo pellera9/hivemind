@@ -188,21 +188,37 @@ export async function pickPrimaryBanner(
   const balanceCents = orgStats?.balanceCents ?? null;
   if (tokensSaved > MEANINGFUL_SAVINGS_TOKENS) {
     const banner = orgStats != null
-      ? renderOnlineSavings(sessionId, orgStats, creds.userName, openGoals)
-      : renderOfflineSavings(sessionId, creds.userName, openGoals);
-    return appendBalance(prependBrief(banner, prefix), balanceCents, creds);
+      ? renderOnlineSavings(sessionId, orgStats, creds.userName, openGoals, prefix)
+      : renderOfflineSavings(sessionId, creds.userName, openGoals, prefix);
+    return appendBalance(banner, balanceCents, creds);
   }
-  const welcome = renderWelcome(sessionId, creds, openGoals, firstRun);
-  return appendBalance(prependBrief(welcome, prefix), balanceCents, creds);
+  const welcome = renderWelcome(sessionId, creds, openGoals, firstRun, prefix);
+  return appendBalance(welcome, balanceCents, creds);
 }
 
 /**
- * Prepend the cold-start brief above a notification's body so it's the
- * first thing the user reads. Returns the input unchanged when null.
+ * Assemble a banner body in reading order: the lead line (org connection or
+ * savings recap) first, then the resume/cold-start brief, then the open-goals
+ * block. Sections are blank-line separated; the brief and goals each carry
+ * their own 📌. The brief already includes its 📌 header (resume) or is plain
+ * prose (cold-start), so only goals get the 📌 prefix here. Empty sections are
+ * dropped so a banner with nothing to resume / no open goals reads as just the
+ * lead line.
  */
-function prependBrief(n: Notification, brief: string | null): Notification {
-  if (!brief) return n;
-  return { ...n, body: `${brief}\n\n${n.body}` };
+function composeBody(
+  lead: string,
+  brief: string | null,
+  openGoals: OpenGoalsSummary | null,
+): string {
+  const parts: string[] = [lead];
+  if (brief) parts.push(brief);
+  const goals = formatOpenGoalsLine(openGoals);
+  if (goals) parts.push(`📌 ${goals}`);
+  // Strip trailing newlines per section so the blank-line separator is the
+  // join's `\n\n` alone. The resume brief ends each session block with a
+  // trailing `\n`, which would otherwise stack with the join to render two
+  // blank lines between the brief and the goals.
+  return parts.map(p => p.replace(/\n+$/, "")).join("\n\n");
 }
 
 /** Below this prepaid balance (cents) we warn the user. Mirrors the SDK's
@@ -247,6 +263,7 @@ function renderWelcome(
   creds: Credentials,
   openGoals: OpenGoalsSummary | null,
   firstEver = false,
+  brief: string | null = null,
 ): Notification {
   // Personalization is optional. If creds.userName is missing (malformed
   // credentials.json — rare), drop the comma-clause rather than fall back
@@ -267,7 +284,7 @@ function renderWelcome(
     id: "welcome",
     severity: "info",
     title,
-    body: appendGoals(`Connected to ${orgPhrase} (workspace ${workspace}).`, openGoals),
+    body: composeBody(`Connected to ${orgPhrase} (workspace ${workspace}).`, brief, openGoals),
     dedupKey: { session: sessionId },
     // User-facing only. This banner (welcome / savings / any prepended
     // cold-start or resume brief) carries mined and summary-derived prose,
@@ -279,17 +296,6 @@ function renderWelcome(
   };
 }
 
-/**
- * Append a one-line goals summary to the banner body when there are
- * any open goals owned by the current user. Returns the base body
- * unchanged when there is nothing to show.
- */
-function appendGoals(body: string, openGoals: OpenGoalsSummary | null): string {
-  const line = formatOpenGoalsLine(openGoals);
-  if (!line) return body;
-  return `${body}\n📌 ${line}`;
-}
-
 /** "🐝 Hivemind has saved your team ~5.2M tokens
  *      42,000 memory recalls · across 187 sessions · you contributed ~140k" */
 function renderOnlineSavings(
@@ -297,6 +303,7 @@ function renderOnlineSavings(
   s: OrgStats,
   userName: string | undefined,
   openGoals: OpenGoalsSummary | null,
+  brief: string | null = null,
 ): Notification {
   const zOrg = bytesToSavedTokens(s.org.memorySearchBytes);
   const zUser = bytesToSavedTokens(s.user.memorySearchBytes);
@@ -319,7 +326,7 @@ function renderOnlineSavings(
   if (skillsGenerated > 0) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
-  const body = appendGoals(`   ${segments.join(" · ")}`, openGoals);
+  const body = composeBody(`   ${segments.join(" · ")}`, brief, openGoals);
 
   return {
     id: "savings-recap",
@@ -327,9 +334,9 @@ function renderOnlineSavings(
     title,
     body,
     dedupKey: { session: sessionId },
-    // User-facing only — see the welcome renderer's note. A prepended
-    // resume/cold-start brief rides in this body, so it must not reach the
-    // model's additionalContext.
+    // User-facing only — see the welcome renderer's note. A resume/cold-start
+    // brief rides in this body, so it must not reach the model's
+    // additionalContext.
     userVisibleOnly: true,
   };
 }
@@ -341,6 +348,7 @@ function renderOfflineSavings(
   sessionId: string,
   userName: string | undefined,
   openGoals: OpenGoalsSummary | null,
+  brief: string | null = null,
 ): Notification {
   const records = readUsageRecords();
   const memorySearchBytes = sumMetric(records, "memorySearchBytes");
@@ -357,7 +365,7 @@ function renderOfflineSavings(
   if (skillsGenerated > 0) {
     segments.push(`${skillsGenerated} ${skillsGenerated === 1 ? "skill" : "skills"} generated`);
   }
-  const body = appendGoals(`   ${segments.join(" · ")}`, openGoals);
+  const body = composeBody(`   ${segments.join(" · ")}`, brief, openGoals);
 
   return {
     id: "savings-recap",
@@ -365,9 +373,9 @@ function renderOfflineSavings(
     title,
     body,
     dedupKey: { session: sessionId },
-    // User-facing only — see the welcome renderer's note. A prepended
-    // resume/cold-start brief rides in this body, so it must not reach the
-    // model's additionalContext.
+    // User-facing only — see the welcome renderer's note. A resume/cold-start
+    // brief rides in this body, so it must not reach the model's
+    // additionalContext.
     userVisibleOnly: true,
   };
 }

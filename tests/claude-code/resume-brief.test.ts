@@ -334,15 +334,15 @@ describe("pickResumeBrief", () => {
     ]);
     const b = await pickResumeBrief(CREDS);
     expect(b?.brief).toContain("Finish the parser");
-    expect(b?.brief).toContain("session sid-A");
+    expect(b?.brief).toContain("/resume sid-A");
     expect(b?.brief).toContain("Wire the CLI");
-    expect(b?.brief).toContain("session sid-B");
+    expect(b?.brief).toContain("/resume sid-B");
     // capped at two — the third open-work session is not shown
     expect(b?.brief).not.toContain("Write the docs");
-    expect(b?.brief).not.toContain("session sid-C");
-    // one CTA, two pins
-    expect((b!.brief.match(/📌/g) ?? []).length).toBe(2);
-    expect((b!.brief.match(/Ask me for the full thread/g) ?? []).length).toBe(1);
+    expect(b?.brief).not.toContain("/resume sid-C");
+    // one header pin (sessions are • bullets under it), two sessions
+    expect((b!.brief.match(/📌/g) ?? []).length).toBe(1);
+    expect((b!.brief.match(/^ {3}• /gm) ?? []).length).toBe(2);
   });
 
   it("falls back to default table/apiUrl/workspaceId when config + creds omit them", async () => {
@@ -374,7 +374,7 @@ describe("pickResumeBrief", () => {
       { summary: real("Wire the fallback"), path: "/summaries/u/abc-123-def.md", last_update_date: "2026-05-30" },
     ]);
     const b = await pickResumeBrief(CREDS);
-    expect(b?.brief).toContain("session abc-123-def");
+    expect(b?.brief).toContain("/resume abc-123-def");
   });
 
   it("stays silent (null) when the only session wrapped clean — no banner", async () => {
@@ -453,7 +453,7 @@ describe("pickResumeBrief", () => {
     queryMock.mockResolvedValue([{ summary: real("Resume A"), path: "/s/a.md" }]);
     let b = await pickResumeBrief(CREDS);
     expect(b?.brief).toContain("Picking up on proj — where you left off");
-    expect(b?.brief).toContain("session a");
+    expect(b?.brief).toContain("/resume a");
     expect(b?.brief).not.toContain(" · ");
     // unparseable date → relativeAge sees NaN
     queryMock.mockResolvedValue([{ summary: real("Resume B"), path: "/s/b.md", last_update_date: "not-a-date" }]);
