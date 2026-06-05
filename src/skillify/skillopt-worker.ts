@@ -28,7 +28,12 @@ async function main(): Promise<void> {
 
   const api = new DeeplakeApi(config.token, config.apiUrl, config.orgId, config.workspaceId, config.tableName);
   const query = (sql: string) => api.query(sql) as Promise<Array<Record<string, unknown>>>;
+  // Read both the global root and the project-scoped root (skills pulled with
+  // `--to project` live under <cwd>/.claude/skills; the detached worker inherits
+  // the SessionStart cwd). Without the project root, a deficient project-pulled
+  // skill would be silently skipped (readSkillBody → null).
   const skillsRoot = path.join(os.homedir(), ".claude", "skills");
+  const projectRoot = path.join(process.cwd(), ".claude", "skills");
   const proposalsRoot = path.join(getStateDir(), "skillopt", "proposals");
   const metaFile = path.join(getStateDir(), "skillopt", "meta.jsonl");
   const metaCache = loadMeta(metaFile);
@@ -37,7 +42,7 @@ async function main(): Promise<void> {
   const res = await runSkillOptCycle({
     query,
     sessionsTable: config.sessionsTableName,
-    readSkillBody: (name, author) => readSkillBodyFromDisk(skillsRoot, name, author),
+    readSkillBody: (name, author) => readSkillBodyFromDisk(skillsRoot, name, author) ?? readSkillBodyFromDisk(projectRoot, name, author),
     writeProposal: (rec) => writeProposalToDisk(proposalsRoot, rec),
     meta: {
       prior: (n, a) => priorEditSummaries(metaCache, n, a),
