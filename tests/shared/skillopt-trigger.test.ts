@@ -34,6 +34,7 @@ describe("runWeeklySkillOpt (auto-fire decision)", () => {
       tryLock: () => true,          // injected so the unit test touches no real lock file
       releaseLock: release,
       reload: () => over.state ?? {}, // in-lock re-read mirrors the pre-lock state by default
+      canFire: () => true,           // injected so the unit test doesn't read real credentials
       ...over,
     });
     return { res, saved, spawn, release };
@@ -45,6 +46,13 @@ describe("runWeeklySkillOpt (auto-fire decision)", () => {
     expect(spawn).toHaveBeenCalledTimes(1); // exactly one spawn
     expect(saved).toEqual([{ lastRun: new Date(NOW).toISOString() }]); // stamped before spawn
     expect(release).toHaveBeenCalledTimes(1); // lock released after firing
+  });
+
+  it("does NOT fire or stamp when logged out (preserves the throttle for a fresh login)", () => {
+    const { res, saved, spawn } = harness({ state: {}, canFire: () => false });
+    expect(res).toEqual({ fired: false, reason: "no-creds" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(saved).toEqual([]); // no stamp → next session after login fires
   });
 
   it("does NOT fire when another process holds the weekly lock (cross-process race)", () => {
