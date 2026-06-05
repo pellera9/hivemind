@@ -246,6 +246,12 @@ describe("listOrgs / listWorkspaces", () => {
     expect(init.headers["X-Activeloop-Org-Id"]).toBe("o1");
   });
 
+  it("listWorkspaces returns [] for a non-array, non-envelope body", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ something: "else" })); // no data, not an array
+    const { listWorkspaces } = await importAuth();
+    expect(await listWorkspaces("tok", "https://api.example", "o1")).toEqual([]);
+  });
+
   it("listWorkspaces accepts a bare array body", async () => {
     fetchMock.mockResolvedValueOnce(ok([{ id: "ws1", name: "default" }]));
     const { listWorkspaces } = await importAuth();
@@ -353,24 +359,190 @@ describe("healDriftedOrgToken", () => {
     expect(saveCredentialsMock).not.toHaveBeenCalled();
   });
 
-  it("re-mints and persists when JWT org_id differs from creds.orgId", async () => {
+  it("re-mints, realigns orgName, and persists when JWT org_id differs from creds.orgId", async () => {
     const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
-    fetchMock.mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }));
+    // 1: token re-mint. 2: listOrgs (orgName realign). Default workspace → no
+    // listWorkspaces call, so exactly two fetches.
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }, { id: "stale-org", name: "stale-name" }]));
     const { healDriftedOrgToken } = await importAuth();
     const out = await healDriftedOrgToken(
-      { token: stale, orgId: "target-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+      { token: stale, orgId: "target-org", orgName: "stale-name", apiUrl: "https://api.example", savedAt: "x" } as any,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.example/users/me/tokens");
     expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe(`Bearer ${stale}`);
     expect(JSON.parse(init.body).organization_id).toBe("target-org");
+    // listOrgs runs with the freshly-minted token, not the stale one.
+    const [orgsUrl, orgsInit] = fetchMock.mock.calls[1];
+    expect(orgsUrl).toBe("https://api.example/organizations");
+    expect(orgsInit.headers.Authorization).toBe("Bearer fresh-tok");
 
     expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
-    expect(saveCredentialsMock.mock.calls[0][0].token).toBe("fresh-tok");
+    const written = saveCredentialsMock.mock.calls[0][0];
+    expect(written.token).toBe("fresh-tok");
+    expect(written.orgName).toBe("target-name"); // realigned away from "stale-name"
     expect(out.token).toBe("fresh-tok");
+    expect(out.orgName).toBe("target-name");
+  });
+
+  it("resets a stale concrete workspace that is absent from the new org", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }]))
+      .mockResolvedValueOnce(ok({ data: [{ id: "ws-of-target", name: "prod" }] }));
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "target-name", workspaceId: "ws-of-old-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+
+    // mint + listOrgs + listWorkspaces = three fetches (non-default workspace).
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2][0]).toBe("https://api.example/workspaces");
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(out.workspaceId).toBe("default"); // old-org workspace dropped
+  });
+
+  it("normalizes a stale workspace NAME to its canonical id in the new org", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }]))
+      .mockResolvedValueOnce(ok({ data: [{ id: "ws-of-target", name: "prod" }] }));
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "target-name", workspaceId: "prod", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    // The name "prod" exists in the target org → resolved to its canonical id.
+    expect(saveCredentialsMock.mock.calls[0][0].workspaceId).toBe("ws-of-target");
+    expect(out.workspaceId).toBe("ws-of-target");
+  });
+
+  it("persists the token heal even when the orgName realign fails (best-effort)", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 }));
+    const logged: string[] = [];
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "stale-name", apiUrl: "https://api.example", savedAt: "x" } as any,
+      (m) => logged.push(m),
+    );
+
+    // The token heal still lands; only the realign was skipped.
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(out.token).toBe("fresh-tok");
+    expect(out.orgName).toBe("stale-name"); // unchanged — realign couldn't run
+    expect(logged).toContain("orgName realign skipped: API 500: boom");
+  });
+
+  it("still repairs the workspace when the orgName lookup fails (independent blocks)", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 })) // listOrgs fails
+      .mockResolvedValueOnce(ok({ data: [{ id: "ws-of-target", name: "prod" }] })); // listWorkspaces ok
+    const logged: string[] = [];
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "stale-name", workspaceId: "ws-of-old-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+      (m) => logged.push(m),
+    );
+
+    // listWorkspaces runs even though listOrgs threw → workspace gets reset.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(out.orgName).toBe("stale-name"); // org block failed, left as-is
+    expect(out.workspaceId).toBe("default"); // workspace block still ran
+    expect(logged).toContain("orgName realign skipped: API 500: boom");
+  });
+
+  it("falls back to DEFAULT_API_URL when creds.apiUrl is missing", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }]));
+    const { healDriftedOrgToken } = await importAuth();
+    // apiUrl is absent → must use DEFAULT_API_URL without throwing.
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "old-name" } as any,
+    );
+    expect(out.token).toBe("fresh-tok");
+    // /users/me/tokens was called against the default API URL (not undefined).
+    expect(fetchMock.mock.calls[0][0]).toMatch(/^https:\/\//);
+  });
+
+  it("skips orgName update when target org is not found in the listOrgs response", async () => {
+    // matchedOrg is undefined → the if(matchedOrg && ...) is false → no update.
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "other-org", name: "other" }])); // target-org absent
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "old-name", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+    expect(out.orgName).toBe("old-name"); // not updated — org not found
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips orgName update when the name is already correct", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "already-correct" }]));
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "already-correct", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+    // orgName unchanged — no realign log, no extra save field change.
+    expect(out.orgName).toBe("already-correct");
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(saveCredentialsMock.mock.calls[0][0].orgName).toBe("already-correct");
+  });
+
+  it("skips workspace update when canonical id already matches", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }]))
+      .mockResolvedValueOnce(ok({ data: [{ id: "ws-canonical", name: "prod" }] }));
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      // workspaceId is already the canonical id → wsMatch.id === currentWs → no update
+      { token: stale, orgId: "target-org", orgName: "target-name", workspaceId: "ws-canonical", apiUrl: "https://api.example", savedAt: "x" } as any,
+    );
+    expect(out.workspaceId).toBe("ws-canonical"); // unchanged
+    expect(saveCredentialsMock.mock.calls[0][0].workspaceId).toBe("ws-canonical");
+  });
+
+  it("swallows workspace realign failure and still persists the token heal", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(ok([{ id: "target-org", name: "target-name" }])) // listOrgs ok
+      .mockResolvedValueOnce(new Response("service error", { status: 503 }));  // listWorkspaces fails
+    const logged: string[] = [];
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "target-name", workspaceId: "ws-stale", apiUrl: "https://api.example", savedAt: "x" } as any,
+      (m) => logged.push(m),
+    );
+
+    // Token heal + orgName realign landed; only workspace was skipped.
+    expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(out.token).toBe("fresh-tok");
+    expect(out.orgName).toBe("target-name"); // org block succeeded
+    expect(out.workspaceId).toBe("ws-stale"); // workspace block failed → unchanged
+    expect(logged).toContain("workspace realign skipped: API 503: service error");
   });
 
   it("returns the original creds and does NOT persist when the mint call fails", async () => {
@@ -625,6 +797,60 @@ describe("saveCredentialsFromToken — org-pinning", () => {
     } finally {
       stderrSpy.mockRestore();
     }
+  });
+
+  it("throws when the account has no organizations", async () => {
+    const token = makeToken({ user_id: "u1" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ id: "u1", name: "Alice" }))
+      .mockResolvedValueOnce(ok([])); // empty org list
+    const { saveCredentialsFromToken } = await importAuth();
+    await expect(saveCredentialsFromToken(token, "https://api.example", { skipTokenMint: true }))
+      .rejects.toThrow("No organizations found");
+  });
+
+  it("uses the single org automatically when the account belongs to exactly one", async () => {
+    const token = makeToken({ user_id: "u1" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ id: "u1", name: "Alice" }))
+      .mockResolvedValueOnce(ok([{ id: "only-org", name: "solo" }]));
+    const { saveCredentialsFromToken } = await importAuth();
+    const creds = await saveCredentialsFromToken(token, "https://api.example", { skipTokenMint: true });
+    expect(creds.orgId).toBe("only-org");
+    expect(creds.orgName).toBe("solo");
+    expect(fetchMock).toHaveBeenCalledTimes(2); // /me + /organizations, no mint
+  });
+
+  it("falls back to orgs[0] silently when skipTokenMint=true and token has no org_id claim", async () => {
+    // Token has NO org_id claim → claimOrg is undefined → preferredOrgId stays undefined
+    // → matched is undefined + orgs.length > 1 → multi-org fallback (orgs[0]).
+    const token = makeToken({ user_id: "u1" }); // no org_id
+    fetchMock
+      .mockResolvedValueOnce(ok({ id: "u1", name: "Alice" }))
+      .mockResolvedValueOnce(ok([{ id: "o1", name: "acme" }, { id: "o2", name: "globex" }]));
+    const { saveCredentialsFromToken } = await importAuth();
+    const creds = await saveCredentialsFromToken(token, "https://api.example", { skipTokenMint: true });
+    expect(creds.orgId).toBe("o1"); // orgs[0]
+  });
+
+  it("derives userName from email when user.name is empty", async () => {
+    const token = makeToken({ user_id: "u1" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ id: "u1", name: "", email: "alice@example.com" }))
+      .mockResolvedValueOnce(ok([{ id: "o1", name: "acme" }]));
+    const { saveCredentialsFromToken } = await importAuth();
+    const creds = await saveCredentialsFromToken(token, "https://api.example", { skipTokenMint: true });
+    expect(creds.userName).toBe("alice"); // email prefix
+  });
+
+  it("falls back to 'unknown' when both user.name and user.email are absent", async () => {
+    const token = makeToken({ user_id: "u1" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ id: "u1", name: "" })) // no email field
+      .mockResolvedValueOnce(ok([{ id: "o1", name: "acme" }]));
+    const { saveCredentialsFromToken } = await importAuth();
+    const creds = await saveCredentialsFromToken(token, "https://api.example", { skipTokenMint: true });
+    expect(creds.userName).toBe("unknown");
   });
 
   it("skipTokenMint=false (device flow) does NOT decode the token — picks orgs[0] as before", async () => {

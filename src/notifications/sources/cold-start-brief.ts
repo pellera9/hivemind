@@ -134,7 +134,7 @@ function writeState(sessionsScanned: number, isFirstRun: boolean): void {
 }
 
 // ─── Text utilities ─────────────────────────────────────────────────────
-function parseTs(s: string | undefined): Date | null {
+export function parseTs(s: string | undefined): Date | null {
   if (!s) return null;
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -146,7 +146,7 @@ function parseTs(s: string | undefined): Date | null {
  * cuts mid-word and never leaves a dangling opener. Strips surrounding
  * quotes and collapses whitespace/markdown noise.
  */
-function cleanSnippet(raw: string, maxLen = 150): string {
+export function cleanSnippet(raw: string, maxLen = 150): string {
   let s = raw
     .replace(/[`*_#>]/g, "")
     .replace(/\s+/g, " ")
@@ -167,7 +167,7 @@ function cleanSnippet(raw: string, maxLen = 150): string {
   return stripDanglingOpener(cut.trim() + "…");
 }
 
-function stripDanglingOpener(s: string): string {
+export function stripDanglingOpener(s: string): string {
   let out = s;
   const opens = (out.match(/\(/g) || []).length;
   const closes = (out.match(/\)/g) || []).length;
@@ -175,7 +175,7 @@ function stripDanglingOpener(s: string): string {
   return out.replace(/[\s,;:(]+$/, "").trim();
 }
 
-function deriveProjectLabel(projDirName: string, cwdSeen: string | undefined): string {
+export function deriveProjectLabel(projDirName: string, cwdSeen: string | undefined): string {
   if (cwdSeen) {
     const seg = cwdSeen.split(/[/\\]/).filter(Boolean);
     return seg[seg.length - 1] || projDirName;
@@ -216,7 +216,7 @@ interface UserRow { ts: Date; content: string; cwd?: string }
 /** Parse complete jsonl lines from a chunk into user-message rows. Partial
  *  first/last lines (from a mid-file byte cut) fail JSON.parse and are
  *  skipped — exactly what we want. */
-function parseUserRows(chunk: string): UserRow[] {
+export function parseUserRows(chunk: string): UserRow[] {
   const rows: UserRow[] = [];
   for (const line of chunk.split("\n")) {
     if (!line) continue;
@@ -283,7 +283,7 @@ function mineLocal(cutoff: Date): SessionMeta[] {
 }
 
 // ─── Signal extraction ──────────────────────────────────────────────────
-function pickSignal(sessions: SessionMeta[]): Signal {
+export function pickSignal(sessions: SessionMeta[]): Signal {
   if (sessions.length === 0) return { kind: "quiet", description: "nothing in window" };
 
   const sorted = [...sessions].sort((a, b) => b.lastTs.getTime() - a.lastTs.getTime());
@@ -343,7 +343,7 @@ function pickSignal(sessions: SessionMeta[]): Signal {
 }
 
 // ─── Render — hard 3-4 sentence cap ─────────────────────────────────────
-function renderBrief(sessions: SessionMeta[], signal: Signal, authed: boolean): string | null {
+export function renderBrief(sessions: SessionMeta[], signal: Signal, authed: boolean): string | null {
   if (sessions.length === 0 || signal.kind === "quiet") return null;
 
   // Generic, privacy-safe copy. The mined signal is used only as a GATE

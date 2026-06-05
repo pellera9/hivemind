@@ -198,6 +198,22 @@ export async function switchOrg(orgId: string, orgName?: string): Promise<void> 
 // when a heal happens, the input creds when nothing to do, and the input
 // creds (after logging) when the mint fails — never throws, never blocks
 // session start.
+//
+// The same legacy regression that drifted the token also left `orgName` and
+// `workspaceId` pointing at the previous org. Re-minting the token realigns
+// every query (it carries the X-Activeloop-Org-Id header + an org-bound JWT)
+// to creds.orgId, but two consumers read the OTHER fields and would still
+// resolve to the stale org:
+//   - billingUrl() (src/deeplake-api.ts) builds the "top up" link from
+//     orgName → the user pays into the wrong org and the low-balance banner,
+//     driven by creds.orgId's real balance, never clears.
+//   - the SessionStart banner prints `org: ${orgName}` → "the shell said the
+//     wrong org".
+// So when we heal the token we also realign orgName and validate workspaceId
+// against creds.orgId. The realign is best-effort and gated behind the token
+// drift trigger: it costs one extra GET (two when a non-default workspace is
+// set) only on the rare session where drift is actually detected, and a
+// failure here must never undo the token heal.
 export async function healDriftedOrgToken(
   creds: Credentials,
   log: (msg: string) => void = () => {},
@@ -220,7 +236,48 @@ export async function healDriftedOrgToken(
       duration: 365 * 24 * 3600,
       organization_id: creds.orgId,
     }, creds.token, apiUrl) as { token: { token: string } };
-    const healed = { ...creds, token: tokenData.token.token };
+    const healed: Credentials = { ...creds, token: tokenData.token.token };
+
+    // Realign orgName + workspaceId to creds.orgId so billingUrl() and the
+    // SessionStart banner stop pointing at the stale org. Two INDEPENDENT
+    // best-effort blocks: a failed orgName lookup must not also skip the
+    // workspace repair (and vice versa) — otherwise one transient 5xx on the
+    // single session that heals the token leaves the OTHER field stale, and
+    // the heal trigger (jwt.org_id !== creds.orgId) won't re-fire next session
+    // to retry it. Both swallow errors so the token heal above still persists.
+    // Each uses the freshly-minted token, which is bound to creds.orgId.
+    try {
+      const orgs = await listOrgs(healed.token, apiUrl);
+      const matchedOrg = orgs.find(o => o.id === creds.orgId);
+      if (matchedOrg && matchedOrg.name !== creds.orgName) {
+        log(`orgName realigned: ${creds.orgName ?? "(unset)"} -> ${matchedOrg.name}`);
+        healed.orgName = matchedOrg.name;
+      }
+    } catch (e) {
+      log(`orgName realign skipped: ${(e as Error).message}`);
+    }
+
+    // "default" is the per-org sentinel the backend resolves itself, so it
+    // needs no validation. Only a concrete workspace id/name can belong to
+    // the previous org and must be re-resolved (or reset) against the new one.
+    const currentWs = creds.workspaceId ?? "default";
+    if (currentWs !== "default") {
+      try {
+        const wsList = await listWorkspaces(healed.token, apiUrl, creds.orgId);
+        const lcWs = currentWs.toLowerCase();
+        const wsMatch = wsList.find(w => w.id === currentWs || (w.name && w.name.toLowerCase() === lcWs));
+        if (!wsMatch) {
+          log(`workspace '${currentWs}' not in org ${creds.orgId} — reset to default`);
+          healed.workspaceId = "default";
+        } else if (wsMatch.id !== currentWs) {
+          log(`workspace '${currentWs}' resolved to id '${wsMatch.id}'`);
+          healed.workspaceId = wsMatch.id;
+        }
+      } catch (e) {
+        log(`workspace realign skipped: ${(e as Error).message}`);
+      }
+    }
+
     saveCredentials(healed);
     log(`token re-minted for org=${creds.orgId}`);
     return healed;
