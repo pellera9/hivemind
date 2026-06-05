@@ -436,7 +436,27 @@ describe("healDriftedOrgToken", () => {
     expect(saveCredentialsMock).toHaveBeenCalledTimes(1);
     expect(out.token).toBe("fresh-tok");
     expect(out.orgName).toBe("stale-name"); // unchanged — realign couldn't run
-    expect(logged.some(m => /realign skipped/.test(m))).toBe(true);
+    expect(logged).toContain("orgName realign skipped: API 500: boom");
+  });
+
+  it("still repairs the workspace when the orgName lookup fails (independent blocks)", async () => {
+    const stale = fakeJwt({ user_id: "u", org_id: "stale-org", type: "api_token" });
+    fetchMock
+      .mockResolvedValueOnce(ok({ token: { token: "fresh-tok" } }))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 })) // listOrgs fails
+      .mockResolvedValueOnce(ok({ data: [{ id: "ws-of-target", name: "prod" }] })); // listWorkspaces ok
+    const logged: string[] = [];
+    const { healDriftedOrgToken } = await importAuth();
+    const out = await healDriftedOrgToken(
+      { token: stale, orgId: "target-org", orgName: "stale-name", workspaceId: "ws-of-old-org", apiUrl: "https://api.example", savedAt: "x" } as any,
+      (m) => logged.push(m),
+    );
+
+    // listWorkspaces runs even though listOrgs threw → workspace gets reset.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(out.orgName).toBe("stale-name"); // org block failed, left as-is
+    expect(out.workspaceId).toBe("default"); // workspace block still ran
+    expect(logged).toContain("orgName realign skipped: API 500: boom");
   });
 
   it("returns the original creds and does NOT persist when the mint call fails", async () => {

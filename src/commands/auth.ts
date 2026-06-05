@@ -239,9 +239,13 @@ export async function healDriftedOrgToken(
     const healed: Credentials = { ...creds, token: tokenData.token.token };
 
     // Realign orgName + workspaceId to creds.orgId so billingUrl() and the
-    // SessionStart banner stop pointing at the stale org. Best-effort: any
-    // failure here is swallowed so the token heal above still persists. Uses
-    // the freshly-minted token, which is bound to creds.orgId.
+    // SessionStart banner stop pointing at the stale org. Two INDEPENDENT
+    // best-effort blocks: a failed orgName lookup must not also skip the
+    // workspace repair (and vice versa) — otherwise one transient 5xx on the
+    // single session that heals the token leaves the OTHER field stale, and
+    // the heal trigger (jwt.org_id !== creds.orgId) won't re-fire next session
+    // to retry it. Both swallow errors so the token heal above still persists.
+    // Each uses the freshly-minted token, which is bound to creds.orgId.
     try {
       const orgs = await listOrgs(healed.token, apiUrl);
       const matchedOrg = orgs.find(o => o.id === creds.orgId);
@@ -249,11 +253,16 @@ export async function healDriftedOrgToken(
         log(`orgName realigned: ${creds.orgName ?? "(unset)"} -> ${matchedOrg.name}`);
         healed.orgName = matchedOrg.name;
       }
-      // "default" is the per-org sentinel the backend resolves itself, so it
-      // needs no validation. Only a concrete workspace id/name can belong to
-      // the previous org and must be re-resolved (or reset) against the new one.
-      const currentWs = creds.workspaceId ?? "default";
-      if (currentWs !== "default") {
+    } catch (e) {
+      log(`orgName realign skipped: ${(e as Error).message}`);
+    }
+
+    // "default" is the per-org sentinel the backend resolves itself, so it
+    // needs no validation. Only a concrete workspace id/name can belong to
+    // the previous org and must be re-resolved (or reset) against the new one.
+    const currentWs = creds.workspaceId ?? "default";
+    if (currentWs !== "default") {
+      try {
         const wsList = await listWorkspaces(healed.token, apiUrl, creds.orgId);
         const lcWs = currentWs.toLowerCase();
         const wsMatch = wsList.find(w => w.id === currentWs || (w.name && w.name.toLowerCase() === lcWs));
@@ -264,9 +273,9 @@ export async function healDriftedOrgToken(
           log(`workspace '${currentWs}' resolved to id '${wsMatch.id}'`);
           healed.workspaceId = wsMatch.id;
         }
+      } catch (e) {
+        log(`workspace realign skipped: ${(e as Error).message}`);
       }
-    } catch (e) {
-      log(`org/workspace realign skipped: ${(e as Error).message}`);
     }
 
     saveCredentials(healed);
