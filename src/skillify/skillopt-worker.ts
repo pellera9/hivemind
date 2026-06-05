@@ -37,7 +37,12 @@ async function main(): Promise<void> {
   const proposalsRoot = path.join(getStateDir(), "skillopt", "proposals");
   const metaFile = path.join(getStateDir(), "skillopt", "meta.jsonl");
   const metaCache = loadMeta(metaFile);
-  const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(); // 30-day lookback
+  // Lookback + thresholds are env-tunable (defaults: 30-day window, the detector's
+  // own min-n, and a ≥5-deficient fire gate). A positive override wins; anything
+  // non-numeric/≤0 falls back to the default.
+  const envNum = (k: string): number | undefined => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : undefined; };
+  const lookbackDays = envNum("HIVEMIND_SKILLOPT_LOOKBACK_DAYS") ?? 30;
+  const sinceIso = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
 
   const res = await runSkillOptCycle({
     query,
@@ -49,7 +54,12 @@ async function main(): Promise<void> {
       has: (n, a, edits) => alreadyProposed(metaCache, n, a, edits),
       record: (n, a, edits) => { const e = metaEntryFor(n, a, edits, new Date().toISOString()); appendMeta(metaFile, e); metaCache.push(e); },
     },
-    detector: { sinceIso, limit: 5000 },
+    detector: {
+      sinceIso, limit: 5000,
+      minInvocations: envNum("HIVEMIND_SKILLOPT_MIN_INVOCATIONS"),
+      failureRateThreshold: envNum("HIVEMIND_SKILLOPT_FAILURE_RATE"),
+    },
+    fireThreshold: envNum("HIVEMIND_SKILLOPT_FIRE_THRESHOLD"),
     now: new Date().toISOString(),
   });
 
