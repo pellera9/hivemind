@@ -39,12 +39,12 @@ const judge = () => vi.fn(async (_s: string, _u: string) => '{"success":0,"confi
 const proposerModel = () => vi.fn(async (_s: string, _u: string) => '[{"op":"append","content":"Always verify via the PostHog API."}]');
 
 describe("runSkillOptCycle", () => {
-  it("fires when >=5 skills are deficient and writes a proposal per editable skill", async () => {
+  it("fires when >=5 skills are deficient and publishes a version per editable skill", async () => {
     const written: ProposalRecord[] = [];
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "2026-06-05T00:00:00Z",
       readSkillBody: async () => ({ body: "## Rules\n1. mock the client", version: 3 }),
-      writeProposal: (r) => written.push(r),
+      publish: (r) => { written.push(r); },
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res.fired).toBe(true);
@@ -55,15 +55,15 @@ describe("runSkillOptCycle", () => {
   });
 
   it("does NOT fire below the threshold (no proposals, even though detection ran)", async () => {
-    const writeProposal = vi.fn();
+    const publish = vi.fn();
     const res = await runSkillOptCycle({
       query: world(4), sessionsTable: "sessions", now: "t",
-      readSkillBody: async () => ({ body: "## Rules", version: 1 }), writeProposal,
+      readSkillBody: async () => ({ body: "## Rules", version: 1 }), publish,
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res).toMatchObject({ fired: false, deficientCount: 4 });
     expect(res.proposals).toHaveLength(0);
-    expect(writeProposal).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("skips a deficient skill absent from the org skills table (no body to edit)", async () => {
@@ -71,7 +71,7 @@ describe("runSkillOptCycle", () => {
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "t",
       readSkillBody: async (name) => (name === "bad0" ? null : { body: "## Rules\n1. mock the client", version: 1 }),
-      writeProposal: (r) => written.push(r),
+      publish: (r) => { written.push(r); },
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res.fired).toBe(true);
@@ -85,7 +85,7 @@ describe("runSkillOptCycle", () => {
     const res = await runSkillOptCycle({
       query: world(6), sessionsTable: "sessions", now: "t",
       readSkillBody: async () => ({ body: "## Rules\n1. mock the client", version: 1 }),
-      writeProposal: (r) => written.push(r),
+      publish: (r) => { written.push(r); },
       detector: { judge: judge() }, proposer: { model: proposerModel() },
       meta: {
         prior: () => ["append: earlier idea"],          // fed to the proposer as context
@@ -139,7 +139,7 @@ describe("runSkillOptCycle", () => {
   it("honors a custom fireThreshold", async () => {
     const res = await runSkillOptCycle({
       query: world(3), sessionsTable: "sessions", now: "t", fireThreshold: 3,
-      readSkillBody: async () => ({ body: "## Rules", version: 1 }), writeProposal: vi.fn(),
+      readSkillBody: async () => ({ body: "## Rules", version: 1 }), publish: vi.fn(),
       detector: { judge: judge() }, proposer: { model: proposerModel() },
     });
     expect(res.fired).toBe(true);

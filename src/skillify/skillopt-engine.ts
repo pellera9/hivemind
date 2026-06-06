@@ -1,15 +1,15 @@
 /**
- * The weekly SkillOpt cycle, wired end to end and fully injectable:
+ * The SkillOpt cycle, wired end to end and fully injectable:
  *
- *   detect deficient skills  →  ≥5 fire gate  →  for each: read body, propose a
- *   bounded edit, write a REVIEW PROPOSAL (not a live publish).
+ *   detect deficient skills  →  ≥N fire gate  →  for each: read the current body
+ *   from the org skills table, propose a bounded edit, and publish the result
+ *   DIRECTLY as the skill's next version (no approval gate).
  *
- * Why proposals, not auto-publish: the offline gate isn't trustworthy (spike
- * finding), so we never auto-overwrite a live skill. The engine surfaces concrete,
- * evidence-backed edit proposals; turning one live is gated on the real-usage A/B
- * (deferred) or a human. Everything is injected (query, judge/proposer models, the
- * skill reader, the proposal writer), so this orchestration is unit-tested with no
- * Deeplake / LLM / fs.
+ * Append-only publish: the improved body lands as version+1 in the Deeplake
+ * skills table, so every teammate re-pulls it; the original author/name are kept
+ * and the loop is recorded as a contributor (see skill-org-publish). Everything
+ * is injected (query, judge/proposer models, the skill reader, the publisher), so
+ * this orchestration is unit-tested with no Deeplake / LLM / fs.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -39,7 +39,7 @@ export interface CycleDeps {
   query: QueryFn;
   sessionsTable: string;
   readSkillBody: (name: string, author: string) => Promise<{ body: string; version: number } | null>; // org skills table is the source of truth — null when the skill isn't there
-  writeProposal: (rec: ProposalRecord) => void;
+  publish: (rec: ProposalRecord) => void | Promise<void>; // land the edit directly as the skill's next org version
   detector?: DetectorConfig;
   proposer?: ProposeConfig;
   fireThreshold?: number; // deficient-skill count to fire (default 5)
@@ -78,7 +78,7 @@ export async function runSkillOptCycle(deps: CycleDeps): Promise<CycleResult> {
     // dedup against the meta memory — don't re-write an edit already tried for this skill.
     const isDup = p.changed && (deps.meta?.has(s.name, s.author, p.edits) ?? false);
     if (p.changed && !isDup) {
-      deps.writeProposal({
+      await deps.publish({
         name: s.name, author: s.author, baseVersion: current.version,
         invocations: s.invocations, confirmedFailures: s.confirmedFailures, failureRate: s.failureRate,
         examples: s.examples, edits: p.edits, report: p.report,
@@ -89,15 +89,6 @@ export async function runSkillOptCycle(deps: CycleDeps): Promise<CycleResult> {
     proposals.push({ name: s.name, author: s.author, changed: p.changed && !isDup, failureRate: s.failureRate });
   }
   return { deficientCount, fired: true, proposals };
-}
-
-/** Default proposal writer: <proposalsRoot>/<name>--<author>/{proposal.json,candidate.md}. */
-export function writeProposalToDisk(proposalsRoot: string, rec: ProposalRecord): string {
-  const dir = path.join(proposalsRoot, `${rec.name}--${rec.author}`);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "candidate.md"), rec.candidateBody.trimEnd() + "\n");
-  fs.writeFileSync(path.join(dir, "proposal.json"), JSON.stringify(rec, null, 2) + "\n");
-  return dir;
 }
 
 /**

@@ -15,7 +15,8 @@ import { log as _log } from "../utils/debug.js";
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { getStateDir } from "./state-dir.js";
-import { runSkillOptCycle, writeProposalToDisk, readSkillBodyFromOrgTable } from "./skillopt-engine.js";
+import { runSkillOptCycle, readSkillBodyFromOrgTable } from "./skillopt-engine.js";
+import { readCurrentSkillRow, publishImprovedSkill } from "./skill-org-publish.js";
 import { loadMeta, appendMeta, priorEditSummaries, alreadyProposed, metaEntryFor } from "./skillopt-meta.js";
 
 const log = (m: string) => _log("skillopt-worker", m);
@@ -31,7 +32,7 @@ async function main(): Promise<void> {
   // truth — not local disk. Detection is org-wide, so a deficient skill often
   // isn't installed on THIS machine; reading the table lets us improve it anyway
   // (and gives us the current version to bump on publish).
-  const proposalsRoot = path.join(getStateDir(), "skillopt", "proposals");
+  const now = new Date().toISOString();
   const metaFile = path.join(getStateDir(), "skillopt", "meta.jsonl");
   const metaCache = loadMeta(metaFile);
   // Lookback + thresholds are env-tunable (defaults: 30-day window, the detector's
@@ -45,7 +46,17 @@ async function main(): Promise<void> {
     query,
     sessionsTable: config.sessionsTableName,
     readSkillBody: (name, author) => readSkillBodyFromOrgTable(query, config.skillsTableName, name, author),
-    writeProposal: (rec) => writeProposalToDisk(proposalsRoot, rec),
+    // Direct publish: land the improved body as the skill's next org version. No
+    // approval gate — detect → improve → publish (append-only; teammates re-pull).
+    publish: async (rec) => {
+      const current = await readCurrentSkillRow(query, config.skillsTableName, rec.name, rec.author);
+      if (!current) { log(`publish skipped: ${rec.name}--${rec.author} not in skills table`); return; }
+      const { version } = await publishImprovedSkill({
+        query, tableName: config.skillsTableName, workspaceId: config.workspaceId,
+        current, newBody: rec.candidateBody, collaborator: config.userName, now,
+      });
+      log(`published ${rec.name}--${rec.author} v${version} (${rec.confirmedFailures}/${rec.invocations} failures)`);
+    },
     meta: {
       prior: (n, a) => priorEditSummaries(metaCache, n, a),
       has: (n, a, edits) => alreadyProposed(metaCache, n, a, edits),
@@ -57,14 +68,14 @@ async function main(): Promise<void> {
       failureRateThreshold: envNum("HIVEMIND_SKILLOPT_FAILURE_RATE"),
     },
     fireThreshold: envNum("HIVEMIND_SKILLOPT_FIRE_THRESHOLD"),
-    now: new Date().toISOString(),
+    now,
   });
 
   if (!res.fired) {
     log(`skillopt: ${res.deficientCount} deficient skill(s) — below the fire gate, no action`);
   } else {
-    const changed = res.proposals.filter((p) => p.changed).length;
-    log(`skillopt: fired — ${res.deficientCount} deficient, ${changed} edit proposal(s) written to ${proposalsRoot}`);
+    const published = res.proposals.filter((p) => p.changed).length;
+    log(`skillopt: fired — ${res.deficientCount} deficient, ${published} skill(s) published to the org table`);
   }
 }
 
