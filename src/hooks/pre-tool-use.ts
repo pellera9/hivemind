@@ -6,7 +6,7 @@ import { join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readStdin } from "../utils/stdin.js";
 import { loadConfig } from "../config.js";
-import { markSkillPending } from "../skillify/skillopt-trigger.js";
+import { armSkillOptOnSkillUse } from "./shared/skillopt-hook.js";
 import { DeeplakeApi } from "../deeplake-api.js";
 import { sqlLike } from "../utils/sql.js";
 import { log as _log } from "../utils/debug.js";
@@ -257,15 +257,8 @@ export async function processPreToolUse(input: PreToolUseInput, deps: ClaudePreT
     logFn = log,
   } = deps;
 
-  // SkillOpt: arm this session for the event trigger if it invoked an ORG skill.
-  // Cheap (one state read/write, org-skill-gated inside markSkillPending) and fully
-  // swallowed — must NEVER affect whether a tool is allowed to run.
-  try {
-    if (input.tool_name === "Skill" && process.env.HIVEMIND_SKILLOPT_DISABLED !== "1") {
-      const ref = (input.tool_input as { skill?: unknown }).skill;
-      if (typeof ref === "string") markSkillPending(input.session_id, ref);
-    }
-  } catch { /* never break PreToolUse */ }
+  // SkillOpt: arm this session if it invoked an ORG skill (swallowed; never blocks tools).
+  armSkillOptOnSkillUse(input.session_id, input.tool_name, input.tool_input);
 
   const cmd = (input.tool_input.command as string) ?? "";
   const shellCmd = getShellCommand(input.tool_name, input.tool_input);
