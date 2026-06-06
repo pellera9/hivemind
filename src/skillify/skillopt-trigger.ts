@@ -25,6 +25,7 @@ import { getStateDir } from "./state-dir.js";
 import { splitOrgSkill } from "./skill-invocations.js";
 import { loadManifest } from "./manifest.js";
 import { loadConfig } from "../config.js";
+import { SKILLOPT_ENV } from "./skillopt-env.js";
 
 const log = (m: string) => _log("skillopt-trigger", m);
 
@@ -37,7 +38,7 @@ function defaultHasCreds(): boolean {
  *  the immediate next turn — "clarify, then push back"). Default 3, env-tunable. */
 export const DEFAULT_JUDGE_WINDOW = 3;
 export function judgeWindow(env: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(env.HIVEMIND_SKILLOPT_JUDGE_WINDOW);
+  const n = Number(env[SKILLOPT_ENV.JUDGE_WINDOW]);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_JUDGE_WINDOW;
 }
 
@@ -130,8 +131,8 @@ export function runEventTrigger(
 ): FireResult {
   const deps = opts.deps ?? {};
   const env = deps.env ?? process.env;
-  if (env.HIVEMIND_SKILLOPT_DISABLED === "1") return { fired: false, reason: "disabled" };
-  if (env.HIVEMIND_SKILLOPT_WORKER === "1") return { fired: false, reason: "in-worker" }; // recursion guard
+  if (env[SKILLOPT_ENV.DISABLED] === "1") return { fired: false, reason: "disabled" };
+  if (env[SKILLOPT_ENV.WORKER] === "1") return { fired: false, reason: "in-worker" }; // recursion guard
   if (!sessionId) return { fired: false, reason: "no-skill" };
   const store = deps.store ?? fileStore;
   const p = store.load(sessionId);
@@ -156,12 +157,12 @@ function spawnWorker(sessionId: string, skill: string, reaction: string, toolUse
       stdio: "ignore",
       env: {
         ...process.env,
-        HIVEMIND_SKILLOPT_WORKER: "1",
-        HIVEMIND_SKILLOPT_SESSION: sessionId,
-        HIVEMIND_SKILLOPT_SKILL: skill,
-        HIVEMIND_SKILLOPT_REACTION: (reaction ?? "").slice(0, MAX_REACTION),
-        ...(toolUseId ? { HIVEMIND_SKILLOPT_TOOL_USE_ID: toolUseId } : {}),
-        ...(agent ? { HIVEMIND_SKILLOPT_AGENT: agent } : {}),
+        [SKILLOPT_ENV.WORKER]: "1",
+        [SKILLOPT_ENV.SESSION]: sessionId,
+        [SKILLOPT_ENV.SKILL]: skill,
+        [SKILLOPT_ENV.REACTION]: (reaction ?? "").slice(0, MAX_REACTION),
+        ...(toolUseId ? { [SKILLOPT_ENV.TOOL_USE_ID]: toolUseId } : {}),
+        ...(agent ? { [SKILLOPT_ENV.AGENT]: agent } : {}),
       },
     });
     child.unref();

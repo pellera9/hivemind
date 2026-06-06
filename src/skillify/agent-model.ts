@@ -18,6 +18,7 @@
  */
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { findAgentBin, type Agent } from "./gate-runner.js";
+import { SKILLOPT_ENV, modelEnvNames, providerEnvName } from "./skillopt-env.js";
 
 export type ModelCall = (systemPrompt: string, userPrompt: string) => Promise<string>;
 export type ScorerRole = "judge" | "proposer"; // judge = cheap/fast, proposer = capable
@@ -100,15 +101,15 @@ const DISPATCH: Record<Agent, AgentDispatch> = {
 
 /** Per-agent, per-role env override: HIVEMIND_SKILLOPT_<AGENT>_<ROLE>_MODEL, then _<AGENT>_MODEL. */
 function envModel(agent: Agent, role: ScorerRole, env: NodeJS.ProcessEnv): string | undefined {
-  const A = agent.toUpperCase();
-  return env[`HIVEMIND_SKILLOPT_${A}_${role.toUpperCase()}_MODEL`] ?? env[`HIVEMIND_SKILLOPT_${A}_MODEL`];
+  const [specific, fallback] = modelEnvNames(agent, role);
+  return env[specific] ?? env[fallback];
 }
 
 /** Per-agent provider override (hermes/pi): HIVEMIND_SKILLOPT_<AGENT>_PROVIDER. The
  *  openrouter default is wrong for a user on a different provider (e.g. AWS Bedrock),
  *  so the provider must be overridable per install. */
 function envProvider(agent: Agent, env: NodeJS.ProcessEnv): string | undefined {
-  return env[`HIVEMIND_SKILLOPT_${agent.toUpperCase()}_PROVIDER`];
+  return env[providerEnvName(agent)];
 }
 
 export function agentModel(opts: {
@@ -135,7 +136,7 @@ export function agentModel(opts: {
     // model is provider-specific (openrouter-style ids), so a bare ..._PROVIDER=bedrock
     // with no ..._MODEL would silently send a wrong model id. Surface it loudly.
     if (providerOverride && !modelOverride && (opts.agent === "hermes" || opts.agent === "pi")) {
-      return reject(new Error(`${opts.agent}: provider overridden to '${provider}' without a model — set HIVEMIND_SKILLOPT_${opts.agent.toUpperCase()}_MODEL to a valid id for that provider`));
+      return reject(new Error(`${opts.agent}: provider overridden to '${provider}' without a model — set ${modelEnvNames(opts.agent, opts.role)[1]} to a valid id for that provider`));
     }
     const args = d.buildArgs(model, provider, system, user);
     // HIVEMIND_CAPTURE=false: these calls aren't real sessions. HIVEMIND_WIKI_WORKER=1:
@@ -174,7 +175,7 @@ export function agentModel(opts: {
  * signatures we can detect reliably, then claude_code as the default.
  */
 export function detectScorerAgent(env: NodeJS.ProcessEnv = process.env): Agent {
-  const explicit = env.HIVEMIND_SKILLOPT_AGENT;
+  const explicit = env[SKILLOPT_ENV.AGENT];
   if (explicit && (["claude_code", "codex", "cursor", "hermes", "pi"] as const).includes(explicit as Agent)) {
     return explicit as Agent;
   }

@@ -20,6 +20,7 @@ import { agentModel, detectScorerAgent } from "./agent-model.js";
 import { improveSkillIfFailed } from "./skillopt-improve.js";
 import { loadMeta, appendMeta, priorEditSummaries, alreadyProposed, metaEntryFor } from "./skillopt-meta.js";
 import { tryAcquireWorkerLock, releaseWorkerLock } from "./state.js";
+import { SKILLOPT_ENV } from "./skillopt-env.js";
 
 const log = (m: string) => _log("skillopt-worker", m);
 
@@ -39,10 +40,10 @@ function resolveAgentBin(agent: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const sessionId = process.env.HIVEMIND_SKILLOPT_SESSION ?? "";
-  const skillRef = process.env.HIVEMIND_SKILLOPT_SKILL ?? "";
-  const reaction = process.env.HIVEMIND_SKILLOPT_REACTION ?? "";
-  const toolUseId = process.env.HIVEMIND_SKILLOPT_TOOL_USE_ID || undefined;
+  const sessionId = process.env[SKILLOPT_ENV.SESSION] ?? "";
+  const skillRef = process.env[SKILLOPT_ENV.SKILL] ?? "";
+  const reaction = process.env[SKILLOPT_ENV.REACTION] ?? "";
+  const toolUseId = process.env[SKILLOPT_ENV.TOOL_USE_ID] || undefined;
   if (!sessionId || !skillRef) { log("no session/skill in env — nothing to do"); return; }
 
   const config = loadConfig();

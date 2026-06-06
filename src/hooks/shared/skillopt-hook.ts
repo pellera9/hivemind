@@ -5,6 +5,7 @@
  * whether a tool runs or a prompt is captured.
  */
 import { markSkillPending, runEventTrigger } from "../../skillify/skillopt-trigger.js";
+import { SKILLOPT_ENV } from "../../skillify/skillopt-env.js";
 
 /**
  * PreToolUse: if the agent invoked a `Skill` tool on an ORG skill (`name--author`),
@@ -12,7 +13,7 @@ import { markSkillPending, runEventTrigger } from "../../skillify/skillopt-trigg
  */
 export function armSkillOptOnSkillUse(sessionId: string, toolName: string, toolInput: unknown, toolUseId?: string): void {
   try {
-    if (toolName !== "Skill" || process.env.HIVEMIND_SKILLOPT_DISABLED === "1") return;
+    if (toolName !== "Skill" || process.env[SKILLOPT_ENV.DISABLED] === "1") return;
     const ref = (toolInput as { skill?: unknown })?.skill;
     if (typeof ref === "string") markSkillPending(sessionId, ref, toolUseId);
   } catch { /* never break PreToolUse */ }
