@@ -40,45 +40,45 @@ export function judgeWindow(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_JUDGE_WINDOW;
 }
 
-/** Cap the pending map so it can't grow unbounded across a long-lived install. */
-const MAX_SESSIONS = 200;
 /** Reaction text passed to the worker via env — bounded so a pasted log can't bloat argv. */
 const MAX_REACTION = 8000;
 
-function stateFile(): string {
-  return path.join(getStateDir(), "skillopt", "state.json");
-}
-
 export interface PendingSkill { skill: string; budget: number }
-export interface SkillOptState {
-  /** sessionId -> the skill awaiting judgment + remaining message budget. */
-  pending?: Record<string, PendingSkill>;
+
+/**
+ * Pending state is stored PER SESSION (one small file each), not a single shared map.
+ * Two concurrent sessions arming/reacting touch DIFFERENT files, so neither can clobber
+ * the other's pending entry (the load-modify-overwrite race codex flagged on the shared
+ * map). A session id is sanitised to a safe filename.
+ */
+function pendingFile(sessionId: string): string {
+  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 200);
+  return path.join(getStateDir(), "skillopt", "pending", `${safe}.json`);
 }
 
-export function loadState(file: string = stateFile()): SkillOptState {
-  try { return JSON.parse(fs.readFileSync(file, "utf8")) as SkillOptState; } catch { return {}; }
+export interface PendingStore {
+  load: (sessionId: string) => PendingSkill | null;
+  save: (sessionId: string, p: PendingSkill | null) => void; // null clears the session
 }
 
-export function saveState(s: SkillOptState, file: string = stateFile()): void {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(s));
-    fs.renameSync(tmp, file);
-  } catch { /* swallow — hooks must never fail */ }
-}
-
-function prune(m: Record<string, PendingSkill>): Record<string, PendingSkill> {
-  const keys = Object.keys(m);
-  if (keys.length <= MAX_SESSIONS) return m;
-  const out: Record<string, PendingSkill> = {};
-  for (const k of keys.slice(keys.length - MAX_SESSIONS)) out[k] = m[k];
-  return out;
-}
+const fileStore: PendingStore = {
+  load(sessionId) {
+    try { return JSON.parse(fs.readFileSync(pendingFile(sessionId), "utf8")) as PendingSkill; } catch { return null; }
+  },
+  save(sessionId, p) {
+    try {
+      const f = pendingFile(sessionId);
+      if (p === null) { try { fs.unlinkSync(f); } catch { /* already gone */ } return; }
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      const tmp = `${f}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(p));
+      fs.renameSync(tmp, f);
+    } catch { /* swallow — hooks must never fail */ }
+  },
+};
 
 export interface MarkDeps {
-  load?: () => SkillOptState;
-  save?: (s: SkillOptState) => void;
+  store?: PendingStore;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -92,16 +92,13 @@ export interface MarkDeps {
 export function markSkillPending(sessionId: string, skillRef: string, deps: MarkDeps = {}): boolean {
   if (!sessionId || !skillRef) return false;
   if (!splitOrgSkill(skillRef)) return false; // not an org skill → not our concern
-  const state = (deps.load ?? loadState)();
-  const pending = prune({ ...(state.pending ?? {}), [sessionId]: { skill: skillRef, budget: judgeWindow(deps.env ?? process.env) } });
-  (deps.save ?? saveState)({ ...state, pending });
+  (deps.store ?? fileStore).save(sessionId, { skill: skillRef, budget: judgeWindow(deps.env ?? process.env) });
   return true;
 }
 
 export interface TriggerDeps {
   env?: NodeJS.ProcessEnv;
-  load?: () => SkillOptState;
-  save?: (s: SkillOptState) => void;
+  store?: PendingStore;
   spawnWorker?: (sessionId: string, skill: string, reaction: string, agent?: string) => void;
   canFire?: () => boolean;
 }
@@ -126,16 +123,14 @@ export function runEventTrigger(
   if (env.HIVEMIND_SKILLOPT_DISABLED === "1") return { fired: false, reason: "disabled" };
   if (env.HIVEMIND_SKILLOPT_WORKER === "1") return { fired: false, reason: "in-worker" }; // recursion guard
   if (!sessionId) return { fired: false, reason: "no-skill" };
-  const state = (deps.load ?? loadState)();
-  const p = state.pending?.[sessionId];
+  const store = deps.store ?? fileStore;
+  const p = store.load(sessionId);
   if (!p) return { fired: false, reason: "no-skill" }; // no org skill awaiting judgment
   if (!(deps.canFire ?? defaultHasCreds)()) return { fired: false, reason: "no-creds" };
 
-  // Spend one message of the budget; close the window when exhausted.
-  const pending = { ...(state.pending ?? {}) };
-  if (p.budget - 1 <= 0) delete pending[sessionId];
-  else pending[sessionId] = { ...p, budget: p.budget - 1 };
-  (deps.save ?? saveState)({ ...state, pending });
+  // Spend one message of this session's budget; close the window when exhausted. Only
+  // this session's file is touched, so a concurrent session can't be clobbered.
+  store.save(sessionId, p.budget - 1 <= 0 ? null : { ...p, budget: p.budget - 1 });
 
   (deps.spawnWorker ?? spawnWorker)(sessionId, p.skill, reaction ?? "", opts.agent);
   return { fired: true, reason: "spawned" };
