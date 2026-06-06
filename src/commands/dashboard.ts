@@ -29,7 +29,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { loadDashboardData } from "../dashboard/data.js";
-import { openInBrowser } from "../dashboard/open.js";
+import { isRemoteSession, openInBrowser } from "../dashboard/open.js";
 import { renderDashboardHtml } from "../dashboard/render.js";
 import { serveDashboardHtml, type ServeHandle } from "../dashboard/serve.js";
 
@@ -148,11 +148,11 @@ export function parseDashboardArgs(args: string[]): ParseResult {
     return { error: `unknown arg '${a}'` };
   }
 
-  // --port is meaningful only in --serve mode. Accepting it silently
-  // without --serve produced confusing no-ops (`hivemind dashboard
-  // --port 9000` looked like it should start a server). Codex review
-  // on the --serve commit caught this — reject explicitly so the user
-  // sees the misconfiguration.
+  // --port is meaningful only with --serve (or when auto-serve kicks
+  // in on remote sessions). Silently accepting --port without --serve
+  // on a local machine would be a no-op that confuses users, so we
+  // keep the explicit guard — but allow it when --serve is implicit.
+  // The runtime auto-serve path will pick up `port` from DashboardArgs.
   if (port !== undefined && !serve) {
     return { error: "--port requires --serve" };
   }
@@ -237,7 +237,15 @@ export async function runDashboardCommand(
     out(`(no codebase graph yet — run 'hivemind graph build' to populate)\n`);
   }
 
-  if (parsed.args.serve) {
+  // Auto-enable --serve on remote sessions (SSH, VS Code Remote,
+  // Codespaces) where xdg-open / open can't reach a local browser.
+  // The user can still suppress this with --no-open if they only want
+  // the file written.
+  const autoServe = !parsed.args.serve && open && isRemoteSession();
+  if (parsed.args.serve || autoServe) {
+    if (autoServe) {
+      out(`(remote session detected — serving over localhost instead of opening a file)\n`);
+    }
     return await runServeLoop(html, parsed.args, runOpts, out, err);
   }
 
@@ -246,7 +254,11 @@ export async function runDashboardCommand(
     if (result.attempted) {
       out(`Opening via ${result.command}\n`);
     } else {
-      out(`(no opener for this platform; open the file above manually)\n`);
+      // Opener not available (no xdg-open, no display) — fall back to
+      // a local serve so the user gets a clickable URL instead of a
+      // path they can't easily open.
+      out(`(no browser opener found — starting local server instead)\n`);
+      return await runServeLoop(html, parsed.args, runOpts, out, err);
     }
   }
   return 0;
