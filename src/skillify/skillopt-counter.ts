@@ -15,6 +15,10 @@
  * isn't counted twice when UserPromptSubmit fires repeatedly within one session.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import { getStateDir } from "./state-dir.js";
+
 export const DEFAULT_FIRE_COUNT = 5;
 /** Cap the dedup ledger so it can't grow unbounded across many sessions. */
 const MAX_COUNTED = 2000;
@@ -80,4 +84,25 @@ export function recordAnchored(
 export function fireCount(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number(env.HIVEMIND_SKILLOPT_FIRE_COUNT);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_FIRE_COUNT;
+}
+
+/** Counter state lives under the HIVEMIND_STATE_DIR-aware skillopt/ subdir (computed
+ *  lazily so a test/HOME swap takes effect; a subdir is skipped by skillify's top-level
+ *  `.json` project enumeration). */
+function counterFile(): string {
+  return path.join(getStateDir(), "skillopt", "counter.json");
+}
+
+export function loadCounterState(file: string = counterFile()): CounterState {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")) as CounterState; } catch { return {}; }
+}
+
+export function saveCounterState(s: CounterState, file: string = counterFile()): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Atomic tmp+rename so a crash mid-write can't leave a torn JSON that resets the tally.
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.renameSync(tmp, file);
+  } catch { /* swallow — hooks must never fail */ }
 }
