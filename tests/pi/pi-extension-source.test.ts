@@ -192,3 +192,38 @@ describe("pi extension — embedding wiring", () => {
     expect(PI_SRC).toMatch(/return\s+"NULL"/);
   });
 });
+
+describe("pi extension — SkillOpt wiring", () => {
+  it("arms on a SKILL.md read in the tool_result handler (non-error reads only)", () => {
+    // pi has no first-class Skill tool — it USES a skill by reading its SKILL.md, so arming
+    // hangs off tool_result, gated on a successful read.
+    expect(PI_SRC).toContain("skilloptArm(sessionId, event.input, event.toolCallId)");
+    expect(PI_SRC).toContain("event.isError !== true");
+    expect(PI_SRC).toContain("/skills/"); // the ref-from-path matcher targets …/skills/<ref>/SKILL.md
+    expect(PI_SRC).toContain("SKILL");
+  });
+
+  it("reacts on the user prompt in the input handler", () => {
+    expect(PI_SRC).toContain("skilloptReact(sessionId, text)");
+  });
+
+  it("spawns the bundled skillopt-worker with the cross-process env contract", () => {
+    expect(PI_SRC).toContain('"skillopt-worker.js"');
+    // these env-var names MUST match SKILLOPT_ENV — the worker reads the literals back
+    for (const v of [
+      "HIVEMIND_SKILLOPT_WORKER", "HIVEMIND_SKILLOPT_SESSION", "HIVEMIND_SKILLOPT_SKILL",
+      "HIVEMIND_SKILLOPT_REACTION", "HIVEMIND_SKILLOPT_AGENT",
+    ]) expect(PI_SRC).toContain(v);
+    expect(PI_SRC).toContain('HIVEMIND_SKILLOPT_AGENT: "pi"'); // judge/proposer run on pi
+  });
+
+  it("honors the kill switch + the in-worker recursion guard", () => {
+    expect(PI_SRC).toContain('process.env.HIVEMIND_SKILLOPT_DISABLED === "1"');
+    expect(PI_SRC).toContain('process.env.HIVEMIND_WIKI_WORKER === "1"');
+  });
+
+  it("only arms org-shaped refs (name--author), not bare/plugin skills", () => {
+    expect(PI_SRC).toContain('ref.includes(":")');      // reject plugin-namespaced
+    expect(PI_SRC).toContain('ref.lastIndexOf("--")');  // require name--author
+  });
+});

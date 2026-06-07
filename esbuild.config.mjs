@@ -267,6 +267,9 @@ const piWorker = [
   { entry: "dist/src/hooks/pi/wiki-worker.js", out: "wiki-worker" },
   { entry: "dist/src/skillify/skillify-worker.js", out: "skillify-worker" },
   { entry: "dist/src/skillify/autopull-worker.js", out: "autopull-worker" },
+  // SkillOpt worker — pi spawns it on a user reaction (the extension can't import the
+  // raw-.ts trigger, so it shells this bundle like the others). Same shared module CC uses.
+  { entry: "dist/src/skillify/skillopt-worker.js", out: "skillopt-worker" },
 ];
 await build({
   entryPoints: Object.fromEntries(piWorker.map(h => [h.out, h.entry])),
