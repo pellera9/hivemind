@@ -89,16 +89,18 @@ export function splitOrgSkill(skill: string): { name: string; author: string } |
 }
 
 /**
- * Org-skill invocations across captured sessions, newest first. Coarse prefilter
- * on `"Skill"` (robust to JSONB colon-spacing) then a precise in-code check, so a
- * stray "Skill" in prose can't slip through as a real invocation.
+ * Org-skill invocations across captured sessions, newest first. Coarse prefilter then a precise
+ * in-code check (invokedSkillRef), so a stray match in prose can't slip through. The prefilter
+ * matches EITHER a first-class `Skill` tool_call OR a `SKILL.md` load (the read/shell path that
+ * pi/codex/hermes use) — otherwise those newly-supported invocations get dropped before
+ * invokedSkillRef can evaluate them.
  */
 export async function listSkillInvocations(
   query: QueryFn,
   sessionsTable: string,
   opts: { sinceIso?: string; untilIso?: string; limit?: number } = {},
 ): Promise<SkillInvocation[]> {
-  const where = [`CAST(message AS TEXT) LIKE '%"Skill"%'`];
+  const where = [`(CAST(message AS TEXT) LIKE '%"Skill"%' OR CAST(message AS TEXT) LIKE '%/SKILL.md%')`];
   if (opts.sinceIso) where.push(`last_update_date >= '${sqlStr(opts.sinceIso)}'`);
   if (opts.untilIso) where.push(`last_update_date < '${sqlStr(opts.untilIso)}'`);
   const limit = opts.limit && opts.limit > 0 ? ` LIMIT ${Math.floor(opts.limit)}` : "";

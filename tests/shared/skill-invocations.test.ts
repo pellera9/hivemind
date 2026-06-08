@@ -67,6 +67,9 @@ describe("listSkillInvocations", () => {
     ]);
     const got = await listSkillInvocations(fn, TABLE, { sinceIso: "2026-06-01", limit: 100 });
     expect(calls[0]).toContain(`CAST(message AS TEXT) LIKE '%"Skill"%'`);
+    // prefilter must ALSO match SKILL.md loads (pi/codex/hermes read/shell invocations), else they
+    // get dropped before invokedSkillRef can evaluate them.
+    expect(calls[0]).toContain(`CAST(message AS TEXT) LIKE '%/SKILL.md%'`);
     expect(calls[0]).toContain("last_update_date >= '2026-06-01'");
     expect(calls[0]).toContain("LIMIT 100");
     expect(got).toEqual([
