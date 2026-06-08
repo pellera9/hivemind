@@ -181,7 +181,8 @@ function collectGoVarConst(
       const nameNode = spec.childForFieldName("name");
       const name = nameNode?.text ?? null;
       if (name !== null && name.length > 0) {
-        pushNode(result, declByName, makeNode(relativePath, name, "const", spec, name[0] === name[0].toUpperCase(), LANG));
+        const kind = spec.type === "const_spec" ? "const" : "variable";
+        pushNode(result, declByName, makeNode(relativePath, name, kind, spec, name[0] === name[0].toUpperCase(), LANG));
       }
     }
   }

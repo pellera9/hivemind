@@ -62,6 +62,7 @@ function collectCppDecls(
   declByName: Map<string, GraphNode>,
   moduleNode: GraphNode,
   enclosingClass: string | null,
+  enclosingNamespace: string | null = null,
 ): void {
   for (let i = 0; i < node.namedChildCount; i++) {
     const child = node.namedChild(i);
@@ -70,7 +71,8 @@ function collectCppDecls(
     if (child.type === "function_definition") {
       const name = extractFunctionName(child);
       if (name === null) continue;
-      const key = enclosingClass !== null ? `${enclosingClass}::${name}` : name;
+      const nsPrefix = enclosingNamespace !== null ? `${enclosingNamespace}::` : "";
+      const key = enclosingClass !== null ? `${nsPrefix}${enclosingClass}::${name}` : `${nsPrefix}${name}`;
       const kind = enclosingClass !== null ? "method" : "function";
       const decl: GraphNode = {
         id: nodeId(relativePath, key, kind),
@@ -98,7 +100,7 @@ function collectCppDecls(
         // recurse into class body
         const body = child.childForFieldName("body");
         if (body !== null) {
-          collectCppDecls(body, relativePath, result, declByName, moduleNode, name);
+          collectCppDecls(body, relativePath, result, declByName, moduleNode, name, enclosingNamespace);
         }
       }
     } else if (child.type === "namespace_definition") {
@@ -108,7 +110,9 @@ function collectCppDecls(
       }
       const body = child.childForFieldName("body");
       if (body !== null) {
-        collectCppDecls(body, relativePath, result, declByName, moduleNode, enclosingClass);
+        // Pass the namespace name so declarations inside are keyed as `ns::symbol`,
+        // matching the `scope::name` format used by collectCppCalls for qualified calls.
+        collectCppDecls(body, relativePath, result, declByName, moduleNode, enclosingClass, name ?? enclosingNamespace);
       }
     } else if (child.type === "template_declaration") {
       // Unwrap template to get the underlying declaration
@@ -127,7 +131,7 @@ function collectCppDecls(
             namedChild: (_: number) => inner,
             namedChildren: [inner],
           } as unknown as TSNode;
-          collectCppDecls(wrapper, relativePath, result, declByName, moduleNode, enclosingClass);
+          collectCppDecls(wrapper, relativePath, result, declByName, moduleNode, enclosingClass, enclosingNamespace);
         }
       }
     } else if (child.type === "preproc_include") {
@@ -156,7 +160,7 @@ function collectCppDecls(
       }
     } else {
       // recurse into field_declaration_list, translation_unit, etc.
-      collectCppDecls(child, relativePath, result, declByName, moduleNode, enclosingClass);
+      collectCppDecls(child, relativePath, result, declByName, moduleNode, enclosingClass, enclosingNamespace);
     }
   }
 }

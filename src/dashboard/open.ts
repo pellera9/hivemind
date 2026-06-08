@@ -178,5 +178,5 @@ export function openInBrowser(
  * process.env globally.
  */
 export function isRemoteSession(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!(env.SSH_CLIENT ?? env.SSH_TTY ?? env.VSCODE_INJECTION ?? env.CODESPACES);
+  return !!(env.SSH_CLIENT || env.SSH_TTY || env.VSCODE_INJECTION || env.CODESPACES);
 }

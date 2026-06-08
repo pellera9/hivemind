@@ -33,15 +33,22 @@ const PKGS = [
 function bindingsLoad() {
   try {
     const Parser = require('tree-sitter');
-    const TS = require('tree-sitter-typescript').typescript;
-    const parser = new Parser();
-    parser.setLanguage(TS);
-    parser.parse('const x = 1;');
-    // B6: also verify the Python grammar loads on this platform / Node ABI.
-    const Py = require('tree-sitter-python');
-    const pyParser = new Parser();
-    pyParser.setLanguage(Py);
-    pyParser.parse('x = 1\n');
+    const langs = [
+      require('tree-sitter-typescript').typescript,
+      require('tree-sitter-javascript'),
+      require('tree-sitter-python'),
+      require('tree-sitter-go'),
+      require('tree-sitter-rust'),
+      require('tree-sitter-java'),
+      require('tree-sitter-ruby'),
+      require('tree-sitter-c'),
+      require('tree-sitter-cpp'),
+    ];
+    for (const lang of langs) {
+      const p = new Parser();
+      p.setLanguage(lang);
+      p.parse('x');
+    }
     return true;
   } catch {
     return false;

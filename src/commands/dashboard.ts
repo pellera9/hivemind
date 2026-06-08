@@ -148,11 +148,10 @@ export function parseDashboardArgs(args: string[]): ParseResult {
     return { error: `unknown arg '${a}'` };
   }
 
-  // --port is meaningful only with --serve (or when auto-serve kicks
-  // in on remote sessions). Silently accepting --port without --serve
-  // on a local machine would be a no-op that confuses users, so we
-  // keep the explicit guard — but allow it when --serve is implicit.
-  // The runtime auto-serve path will pick up `port` from DashboardArgs.
+  // --port is meaningful only with --serve. The parser is pure and has no
+  // access to isRemoteSession(), so --port without --serve is always rejected
+  // even on remote sessions where auto-serve would kick in. Users who want a
+  // custom port on a remote session must pass both: --serve --port <n>.
   if (port !== undefined && !serve) {
     return { error: "--port requires --serve" };
   }

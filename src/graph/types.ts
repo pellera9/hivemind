@@ -8,7 +8,7 @@
  *
  * Supported languages: TypeScript, JavaScript, Python, Go, Rust, Java, Ruby, C, C++.
  * Edge types are intra-file for `calls` and file-level for `imports`.
- * Cross-file call resolution lands in Phase 2.
+ * Cross-file call resolution lands in Phase 1.5.
  */
 
 /**
@@ -132,6 +132,7 @@ export type NodeKind =
   | "type_alias"
   | "enum"
   | "const"
+  | "variable"
   | "module";
 
 export type NodeLanguage =

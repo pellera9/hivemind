@@ -48,7 +48,7 @@ const USAGE = `hivemind graph — codebase-graph commands (Phase 1.5)
 
 Usage:
   hivemind graph build [--cwd <path>]
-      Walk the project for supported source files (TS/JS/Python), extract symbols + edges,
+      Walk the project for supported source files (TS, JS, Python, Go, Rust, Java, Ruby, C, C++), extract symbols + edges,
       and write a snapshot to ~/.hivemind/graphs/<repo-key>/snapshots/<commit-sha>.json.
       Also updates ~/.hivemind/graphs/<repo-key>/latest-commit.txt and the
       per-repo .last-build.json (consumed by the SessionEnd auto-build hook).
