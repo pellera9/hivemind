@@ -182,6 +182,9 @@ export interface RunDashboardOptions {
   /** Test injection — defaults to a real process.on('SIGINT', ...).
    *  Returns a cleanup fn the runner calls after the server stops. */
   onSignal?: (signal: NodeJS.Signals, handler: () => void) => () => void;
+  /** Test injection — overrides isRemoteSession() so tests are not
+   *  affected by the CI runner's SSH/VSCODE env vars. */
+  isRemote?: boolean;
   /** Where stdout messages land. Defaults to process.stdout.write. */
   out?: (msg: string) => void;
   /** Where errors land. Defaults to process.stderr.write. */
@@ -240,7 +243,8 @@ export async function runDashboardCommand(
   // Codespaces) where xdg-open / open can't reach a local browser.
   // The user can still suppress this with --no-open if they only want
   // the file written.
-  const autoServe = !parsed.args.serve && open && isRemoteSession();
+  const remote = runOpts.isRemote ?? isRemoteSession();
+  const autoServe = !parsed.args.serve && open && remote;
   if (parsed.args.serve || autoServe) {
     if (autoServe) {
       out(`(remote session detected — serving over localhost instead of opening a file)\n`);
