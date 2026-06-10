@@ -165,6 +165,20 @@ describe("wiki-worker — no events", () => {
     expect(releaseLockMock).toHaveBeenCalled();
   });
 
+  it("falls back to default retries when the env var is non-numeric (no silent disable)", async () => {
+    // Regression guard: a garbage HIVEMIND_WIKI_EVENT_RETRIES must NOT become
+    // NaN and silently skip the retry loop (which would re-strand placeholders).
+    process.env.HIVEMIND_WIKI_EVENT_RETRIES = "not-a-number";
+    process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS = "0";
+    fetchMock.mockResolvedValue(jsonResp({ columns: ["message", "creation_date"], rows: [] }));
+    await runWorker();
+    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setImmediate(r));
+    const log = readFileSync(join(hooksDir, "wiki.log"), "utf-8");
+    // It must have retried (fallback to the default of 5), not bailed immediately.
+    expect(log).toContain("no events yet — retry");
+  });
+
   it("retries and recovers when events show up on a later fetch (race)", async () => {
     // Reproduces the real bug: the async capture write lags behind
     // SessionEnd, so the first event SELECT returns empty. With backoff=0 the

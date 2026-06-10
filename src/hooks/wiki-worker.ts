@@ -64,8 +64,19 @@ function esc(s: string): string {
 // ending at once) those rows can lag behind SessionEnd, so the worker can read
 // zero events for a session that does have them. Retry with linear backoff
 // before giving up, instead of stranding the SessionStart placeholder.
-const EVENT_FETCH_RETRIES = Number(process.env.HIVEMIND_WIKI_EVENT_RETRIES ?? "5");
-const EVENT_FETCH_BACKOFF_MS = Number(process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS ?? "1500");
+/**
+ * Parse a non-negative integer from an env var, falling back to `fallback`
+ * for missing / non-numeric / negative values. Without this, a misconfigured
+ * env var would make `Number(...)` return NaN, the retry loop condition
+ * `attempt <= NaN` would be false, and retries would be silently disabled —
+ * reintroducing the stranded-placeholder bug under load.
+ */
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const n = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const EVENT_FETCH_RETRIES = parseNonNegativeInt(process.env.HIVEMIND_WIKI_EVENT_RETRIES, 5);
+const EVENT_FETCH_BACKOFF_MS = parseNonNegativeInt(process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS, 1500);
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 async function query(sql: string, retries = 4): Promise<Record<string, unknown>[]> {
