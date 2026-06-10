@@ -119,18 +119,36 @@ beforeEach(() => {
 afterEach(() => {
   global.fetch = originalFetch;
   process.argv[2] = originalArgv2;
+  delete process.env.HIVEMIND_WIKI_EVENT_RETRIES;
+  delete process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS;
   try { rmSync(rootDir, { recursive: true, force: true }); } catch { /* ignore */ }
   vi.restoreAllMocks();
 });
 
-// ═══ early exit: zero events ═══════════════════════════════════════════════
+// ═══ zero events: retry, then remove the orphan placeholder ════════════════
 
 describe("wiki-worker — no events", () => {
-  it("exits early when the sessions table has no rows for this session", async () => {
-    fetchMock.mockResolvedValue(jsonResp({ columns: ["message", "creation_date"], rows: [] }));
+  it("removes the orphan placeholder when no events ever appear", async () => {
+    // retries=0 → skip the backoff loop, go straight to cleanup (keeps the
+    // test instant; the retry path itself is covered separately below).
+    process.env.HIVEMIND_WIKI_EVENT_RETRIES = "0";
+    const sqls: string[] = [];
+    fetchMock.mockImplementation(async (_url: string, opts: any) => {
+      sqls.push(JSON.parse(opts.body).query);
+      return jsonResp({ columns: ["message", "creation_date"], rows: [] });
+    });
     await runWorker();
+
     const log = readFileSync(join(hooksDir, "wiki.log"), "utf-8");
-    expect(log).toContain("no session events found — exiting");
+    expect(log).toContain("removing orphan placeholder");
+    // A DELETE guarded on description='in progress' must be issued for THIS
+    // session's summary path — never an unguarded delete that could clobber a
+    // real summary written by a concurrent worker.
+    const del = sqls.find(s => /^\s*DELETE FROM "memory"/.test(s));
+    expect(del).toBeTruthy();
+    expect(del).toContain("description = 'in progress'");
+    expect(del).toContain("/summaries/alice/sid-worker.md");
+    // It must NOT have run claude -p or written any summary.
     expect(execFileSyncMock).not.toHaveBeenCalled();
     expect(uploadSummaryMock).not.toHaveBeenCalled();
     expect(finalizeSummaryMock).not.toHaveBeenCalled();
@@ -138,11 +156,61 @@ describe("wiki-worker — no events", () => {
     expect(releaseLockMock).toHaveBeenCalledWith("sid-worker");
   });
 
-  it("treats a response with null rows/columns as empty", async () => {
+  it("treats a response with null rows/columns as empty (then cleans up)", async () => {
+    process.env.HIVEMIND_WIKI_EVENT_RETRIES = "0";
     fetchMock.mockResolvedValue(jsonResp({}));
     await runWorker();
     expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(uploadSummaryMock).not.toHaveBeenCalled();
     expect(releaseLockMock).toHaveBeenCalled();
+  });
+
+  it("falls back to default retries when the env var is non-numeric (no silent disable)", async () => {
+    // Regression guard: a garbage HIVEMIND_WIKI_EVENT_RETRIES must NOT become
+    // NaN and silently skip the retry loop (which would re-strand placeholders).
+    process.env.HIVEMIND_WIKI_EVENT_RETRIES = "not-a-number";
+    process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS = "0";
+    fetchMock.mockResolvedValue(jsonResp({ columns: ["message", "creation_date"], rows: [] }));
+    await runWorker();
+    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setImmediate(r));
+    const log = readFileSync(join(hooksDir, "wiki.log"), "utf-8");
+    // It must have retried (fallback to the default of 5), not bailed immediately.
+    expect(log).toContain("no events yet — retry");
+  });
+
+  it("retries and recovers when events show up on a later fetch (race)", async () => {
+    // Reproduces the real bug: the async capture write lags behind
+    // SessionEnd, so the first event SELECT returns empty. With backoff=0 the
+    // worker should retry, see the events on a subsequent fetch, and finalize
+    // normally instead of stranding the placeholder.
+    process.env.HIVEMIND_WIKI_EVENT_RETRIES = "5";
+    process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS = "0";
+    let eventSelects = 0;
+    fetchMock.mockImplementation(async (_url: string, opts: any) => {
+      const q = JSON.parse(opts.body).query as string;
+      if (/^\s*SELECT message, creation_date FROM "sessions"/.test(q)) {
+        eventSelects++;
+        // Empty for the first two attempts, then the events appear.
+        if (eventSelects <= 2) return jsonResp({ columns: ["message", "creation_date"], rows: [] });
+        return jsonResp({ columns: ["message", "creation_date"], rows: [[JSON.stringify({ type: "user_message", content: "hi" }), "2026-01-01T00:00:00Z"]] });
+      }
+      // path lookup + existing-summary lookup → empty is fine
+      return jsonResp({ columns: [], rows: [] });
+    });
+    // claude -p "writes" the summary file the worker reads back.
+    execFileSyncMock.mockImplementation(() => { writeFileSync(join(tmpDir, "summary.md"), "real summary body"); });
+
+    await runWorker();
+    // Allow the backoff-0 setTimeout retries to flush.
+    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setImmediate(r));
+
+    const log = readFileSync(join(hooksDir, "wiki.log"), "utf-8");
+    expect(log).toContain("no events yet — retry");
+    expect(eventSelects).toBeGreaterThanOrEqual(3);
+    expect(execFileSyncMock).toHaveBeenCalled();
+    expect(uploadSummaryMock).toHaveBeenCalled();
   });
 });
 

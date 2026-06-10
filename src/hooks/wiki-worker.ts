@@ -59,6 +59,26 @@ function esc(s: string): string {
     .replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
+// The capture hooks INSERT session events asynchronously, and Deeplake reads
+// are eventually-consistent. Under concurrency (many SDK / `claude -p` sessions
+// ending at once) those rows can lag behind SessionEnd, so the worker can read
+// zero events for a session that does have them. Retry with linear backoff
+// before giving up, instead of stranding the SessionStart placeholder.
+/**
+ * Parse a non-negative integer from an env var, falling back to `fallback`
+ * for missing / non-numeric / negative values. Without this, a misconfigured
+ * env var would make `Number(...)` return NaN, the retry loop condition
+ * `attempt <= NaN` would be false, and retries would be silently disabled —
+ * reintroducing the stranded-placeholder bug under load.
+ */
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const n = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const EVENT_FETCH_RETRIES = parseNonNegativeInt(process.env.HIVEMIND_WIKI_EVENT_RETRIES, 5);
+const EVENT_FETCH_BACKOFF_MS = parseNonNegativeInt(process.env.HIVEMIND_WIKI_EVENT_BACKOFF_MS, 1500);
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
 async function query(sql: string, retries = 4): Promise<Record<string, unknown>[]> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const r = await fetch(`${cfg.apiUrl}/workspaces/${cfg.workspaceId}/tables/query`, {
@@ -109,15 +129,37 @@ function cleanup(): void {
 
 async function main(): Promise<void> {
   try {
-    // 1. Fetch session events from sessions table, reconstruct JSONL
+    // 1. Fetch session events from sessions table, reconstruct JSONL.
+    // Retry on an empty result: the async capture writes (or Deeplake read
+    // consistency) may simply be lagging behind SessionEnd under load.
     wlog("fetching session events");
-    const rows = await query(
+    const fetchEvents = () => query(
       `SELECT message, creation_date FROM "${cfg.sessionsTable}" ` +
       `WHERE path LIKE '${esc(`/sessions/%${cfg.sessionId}%`)}' ORDER BY creation_date ASC`
     );
+    let rows = await fetchEvents();
+    for (let attempt = 1; rows.length === 0 && attempt <= EVENT_FETCH_RETRIES; attempt++) {
+      const delay = EVENT_FETCH_BACKOFF_MS * attempt;
+      wlog(`no events yet — retry ${attempt}/${EVENT_FETCH_RETRIES} in ${delay}ms`);
+      await sleep(delay);
+      rows = await fetchEvents();
+    }
 
     if (rows.length === 0) {
-      wlog("no session events found — exiting");
+      // Events never showed up. Do NOT leave the SessionStart placeholder
+      // stranded at 'in progress' forever — remove it. The `description =
+      // 'in progress'` guard means a concurrent worker that already wrote a
+      // real summary for this session is never clobbered.
+      wlog("no session events after retries — removing orphan placeholder");
+      try {
+        await query(
+          `DELETE FROM "${cfg.memoryTable}" ` +
+          `WHERE path = '${esc(`/summaries/${cfg.userName}/${cfg.sessionId}.md`)}' ` +
+          `AND description = 'in progress'`
+        );
+      } catch (e: any) {
+        wlog(`orphan placeholder cleanup failed: ${e.message}`);
+      }
       return;
     }
 
