@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="https://trendshift.io/repositories/28172" target="_blank"><img src="https://trendshift.io/api/badge/repositories/28172" alt="activeloopai%2Fhivemind | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+  <a href="https://trendshift.io/repositories/28172" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/28172" alt="activeloopai/hivemind | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
 > One engineer's agent figures out a tricky migration on Monday.
