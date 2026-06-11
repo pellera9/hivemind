@@ -200,6 +200,15 @@ describe("hivemind_read", () => {
     expect(JSON.stringify(out)).toContain("Read failed: conn refused");
   });
 
+  it("a row with SQL NULL content renders as empty, not as the string 'null'", async () => {
+    // message is a nullable JSONB column, so message::text can be NULL on
+    // real session rows. String(null) would hand the agent a literal "null".
+    queryMock.mockResolvedValue([{ path: "/sessions/alice/s.jsonl", content: null }]);
+    await importServer();
+    const out = await registeredTools.get("hivemind_read")!.handler({ path: "/sessions/alice/s.jsonl" }) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe("");
+  });
+
   it("not authenticated → auth-error short-circuits before any query", async () => {
     loadCredentialsMock.mockReturnValue(null);
     await importServer();
@@ -261,6 +270,65 @@ describe("hivemind_index", () => {
     await importServer();
     const out = await registeredTools.get("hivemind_index")!.handler({}) as { content: { text: string }[] };
     expect(out.content[0].text).toContain("/summaries/alice/a.md\t2026-04-01\tml\tAlice's first session");
+  });
+
+  it("incomplete legacy rows render placeholders, never the strings 'null'/'undefined'", async () => {
+    // Rows from orgs predating a schema-heal can come back with missing
+    // keys or SQL NULLs. The agent reads this output verbatim — feeding it
+    // "undefined\tnull\t..." would poison the recall context.
+    queryMock.mockResolvedValue([
+      { description: null, project: null, last_update_date: null },
+    ]);
+    await importServer();
+    const out = await registeredTools.get("hivemind_index")!.handler({}) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe("path\tlast_updated\tproject\tdescription\n?\t\t\t");
+  });
+});
+
+describe("fresh org — missing memory/sessions tables (issue #252)", () => {
+  // Exact error shape captured from a live repro against api.deeplake.ai
+  // (MCP server pointed at a nonexistent table). The backend 400 must be
+  // classified as "memory is empty", not surfaced raw.
+  const missingTableErr = new Error(
+    'Query failed: 400: {"error":"Table does not exist: relation \\"memory\\" does not exist","code":"INVALID_REQUEST","request_id":"fb0c2da8-d02c-4670-8ecd-c232d59b59da"}',
+  );
+  const freshOrgHint =
+    "Hivemind memory is empty — tables are created when the first agent session starts, and entries appear after it ends.";
+
+  it("hivemind_index: missing table → 'No summaries found.' + fresh-org hint, no raw 400", async () => {
+    queryMock.mockRejectedValue(missingTableErr);
+    await importServer();
+    const out = await registeredTools.get("hivemind_index")!.handler({}) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe(`No summaries found. ${freshOrgHint}`);
+  });
+
+  it("hivemind_search: missing table → 'No matches' + fresh-org hint, no raw 400", async () => {
+    searchDeeplakeTablesMock.mockRejectedValue(missingTableErr);
+    await importServer();
+    const out = await registeredTools.get("hivemind_search")!.handler({ query: "needle" }) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe(`No matches for "needle". ${freshOrgHint}`);
+  });
+
+  it("hivemind_read: missing table → 'No content found' + fresh-org hint, no raw 400", async () => {
+    queryMock.mockRejectedValue(missingTableErr);
+    await importServer();
+    const out = await registeredTools.get("hivemind_read")!.handler({ path: "/summaries/alice/a.md" }) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe(`No content found at /summaries/alice/a.md. ${freshOrgHint}`);
+  });
+
+  it("bare postgres wording (relation ... does not exist) is also classified", async () => {
+    queryMock.mockRejectedValue(new Error('relation "sessions" does not exist'));
+    await importServer();
+    const out = await registeredTools.get("hivemind_index")!.handler({}) as { content: { text: string }[] };
+    expect(out.content[0].text).toBe(`No summaries found. ${freshOrgHint}`);
+  });
+
+  it("missing COLUMN is NOT treated as fresh org — raw error still surfaces", async () => {
+    queryMock.mockRejectedValue(new Error('column "description" of relation "memory" does not exist'));
+    await importServer();
+    const out = await registeredTools.get("hivemind_index")!.handler({}) as { content: { text: string }[] };
+    expect(out.content[0].text).toContain("Index failed:");
+    expect(out.content[0].text).not.toContain("No summaries found.");
   });
 });
 

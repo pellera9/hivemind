@@ -19,6 +19,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadCredentials } from "../commands/auth.js";
 import { loadConfig } from "../config.js";
 import { DeeplakeApi } from "../deeplake-api.js";
+import { isMissingTableError } from "../deeplake-schema.js";
 import { sqlStr, sqlLike } from "../utils/sql.js";
 import { searchDeeplakeTables, buildGrepSearchOptions, normalizeContent, type GrepMatchParams } from "../shell/grep-core.js";
 import { getVersion } from "../cli/version.js";
@@ -45,6 +46,16 @@ function getContext(): ServerContext | { error: string } {
 function errorResult(text: string): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text }] };
 }
+
+/**
+ * On a fresh org no session has run yet, so the memory/sessions tables
+ * don't exist — provisioning happens in the per-agent SessionStart hooks,
+ * not here (the MCP server is read-only; a READ-role member couldn't
+ * CREATE TABLE anyway). Treat the backend's missing-table 400 as "memory
+ * is empty" instead of surfacing the raw error (issue #252).
+ */
+const FRESH_ORG_HINT =
+  "Hivemind memory is empty — tables are created when the first agent session starts, and entries appear after it ends.";
 
 const server = new McpServer({
   name: "hivemind",
@@ -87,6 +98,7 @@ server.registerTool(
       return { content: [{ type: "text", text: lines.join("\n\n---\n\n") }] };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isMissingTableError(msg)) return errorResult(`No matches for "${query}". ${FRESH_ORG_HINT}`);
       return errorResult(`Search failed: ${msg}`);
     }
   },
@@ -120,6 +132,7 @@ server.registerTool(
       return { content: [{ type: "text", text }] };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isMissingTableError(msg)) return errorResult(`No content found at ${path}. ${FRESH_ORG_HINT}`);
       return errorResult(`Read failed: ${msg}`);
     }
   },
@@ -160,6 +173,7 @@ server.registerTool(
       return { content: [{ type: "text", text: `path\tlast_updated\tproject\tdescription\n${lines.join("\n")}` }] };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isMissingTableError(msg)) return errorResult(`No summaries found. ${FRESH_ORG_HINT}`);
       return errorResult(`Index failed: ${msg}`);
     }
   },
