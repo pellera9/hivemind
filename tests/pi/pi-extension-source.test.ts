@@ -69,6 +69,22 @@ describe("pi extension — embedding wiring", () => {
     expect(sessionsInsertColumns()).toContain("plugin_version");
   });
 
+  // The CREATE/INSERT invariants above only protect FRESH tables. Existing
+  // 13-column pi tables (the actual prod incident — org c2d29f27) are recovered
+  // by the session_start SCHEMA_HEAL pass. Guard that contract too: dropping
+  // plugin_version from the heal, or no longer healing MEMORY_TABLE, would
+  // silently re-break pre-existing tables while the suite stayed green.
+  it("session_start SCHEMA_HEAL heals sessions + memory tables for plugin_version", () => {
+    const block = PI_SRC.match(/const SCHEMA_HEAL[^=]*=\s*\[([\s\S]*?)\];/);
+    expect(block).not.toBeNull();
+    const heal = block![1];
+    expect(heal).toContain("SESSIONS_TABLE");
+    expect(heal).toContain("MEMORY_TABLE");
+    const pluginVersionHeals =
+      heal.match(/\["plugin_version",\s*"TEXT NOT NULL DEFAULT ''"\]/g) ?? [];
+    expect(pluginVersionHeals.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("auto-spawn target is the canonical shared-deps daemon path", () => {
     expect(PI_SRC).toContain('".hivemind"');
     expect(PI_SRC).toContain('"embed-deps"');

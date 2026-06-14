@@ -1314,7 +1314,7 @@ export default function hivemindExtension(pi: ExtensionAPI): void {
           const rows = await dlQuery(
             creds,
             `SELECT column_name FROM information_schema.columns ` +
-              `WHERE table_name = '${table}' AND table_schema = '${creds.workspaceId}'`,
+              `WHERE table_name = '${sqlStr(table)}' AND table_schema = '${sqlStr(creds.workspaceId)}'`,
           );
           const have = new Set(
             rows.map((r) => String((r as Record<string, unknown>).column_name).toLowerCase()),
